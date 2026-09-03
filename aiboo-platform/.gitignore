@@ -17,4 +17,6 @@ logs/
 .venv/
 venv/
 env/
-.vscode/
+# Project-shared VS Code workspace (launch configs, tasks) — referenced by
+# VSCODE_GUIDE.md. Personal overrides live in untracked *.local.json / settings.
+!.vscode/

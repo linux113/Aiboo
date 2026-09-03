@@ -1,0 +1,145 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "aiboo: infra up (mongo+redis via Docker)",
+      "type": "shell",
+      "command": "docker compose --profile redis up -d mongodb redis",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
+    },
+    {
+      "label": "aiboo: infra down",
+      "type": "shell",
+      "command": "docker compose stop mongodb redis",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "aiboo: install deps (backend+frontend+agent+cv)",
+      "type": "shell",
+      "command": "npm --prefix backend ci && npm --prefix frontend ci && python3 -m pip install -r agent/requirements.txt -r cv-service/requirements.txt",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "aiboo: frontend dev (vite)",
+      "type": "shell",
+      "command": "npm run dev",
+      "options": {
+        "cwd": "${workspaceFolder}/frontend"
+      },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
+    },
+    {
+      "label": "aiboo: docker up (full stack)",
+      "type": "shell",
+      "command": "docker compose --profile redis up -d --build",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "aiboo: docker down",
+      "type": "shell",
+      "command": "docker compose down",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "test: backend smoke (64 checks)",
+      "type": "shell",
+      "command": "node smoke-test.mjs",
+      "options": {
+        "cwd": "${workspaceFolder}/backend"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "test: agent pytest (86)",
+      "type": "shell",
+      "command": "python3 -m pytest tests/ -q",
+      "options": {
+        "cwd": "${workspaceFolder}/agent"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "check: frontend types (tsc)",
+      "type": "shell",
+      "command": "npx tsc --noEmit",
+      "options": {
+        "cwd": "${workspaceFolder}/frontend"
+      },
+      "problemMatcher": [
+        "$tsc"
+      ]
+    },
+    {
+      "label": "check: helm chart",
+      "type": "shell",
+      "command": "python3 deploy/helm/validate-templates.py deploy/helm/aiboo",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "aiboo: real stack up (mongo+redis+backend+agent+web, logs\u2192files)",
+      "type": "shell",
+      "command": "bash scripts/real-stack.sh up",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
+    },
+    {
+      "label": "aiboo: real stack logs (tail)",
+      "type": "shell",
+      "command": "bash scripts/real-stack.sh logs",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "isBackground": true,
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "aiboo: real stack down",
+      "type": "shell",
+      "command": "bash scripts/real-stack.sh down",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    }
+  ]
+}
