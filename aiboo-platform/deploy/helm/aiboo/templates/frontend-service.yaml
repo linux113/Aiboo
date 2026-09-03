@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: aiboo-frontend
+  labels:
+    app.kubernetes.io/name: aiboo-frontend
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/part-of: aiboo
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: aiboo-frontend
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: 5173
+      targetPort: http

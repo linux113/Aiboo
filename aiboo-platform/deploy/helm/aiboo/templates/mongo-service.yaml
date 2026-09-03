@@ -1,0 +1,19 @@
+{{- if .Values.mongo.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: aiboo-mongo
+  labels:
+    app.kubernetes.io/name: aiboo-mongo
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/part-of: aiboo
+spec:
+  clusterIP: None       # headless — stable identity for the StatefulSet
+  selector:
+    app.kubernetes.io/name: aiboo-mongo
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: mongo
+      port: 27017
+      targetPort: mongo
+{{- end }}

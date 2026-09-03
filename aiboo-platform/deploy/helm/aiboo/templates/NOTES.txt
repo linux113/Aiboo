@@ -1,0 +1,33 @@
+AiBoO platform deployed as release "{{ .Release.Name }}".
+
+{{- if .Values.ingress.enabled }}
+Access:       http://{{ .Values.ingress.host }}
+              (ensure the ingress controller + DNS/hosts entry exist)
+{{- end }}
+API docs:      http://{{ .Values.ingress.host }}/api/docs   (admin JWT in production)
+Health checks: aiboo-backend:4000/health · aiboo-agent:8001/health · aiboo-cv:5050/health
+
+Components:
+  · aiboo-frontend (nginx, same-origin proxy)      replicas={{ .Values.frontend.replicas }}
+  · aiboo-backend  (Express + Socket.IO)           hpa={{ .Values.backend.hpa.enabled }}
+  · aiboo-agent    (tri-gate orchestrator)         orchestrator={{ .Values.agent.runOrchestrator }}
+  · aiboo-cv       (YOLOv8 + DeepSORT)             gpu={{ .Values.cv.gpu.enabled }}
+{{- if .Values.mongo.enabled }}
+  · aiboo-mongo    (StatefulSet)
+{{- end }}
+{{- if .Values.redis.enabled }}
+  · aiboo-redis    (revocation + rate limits + socket fan-out)
+{{- end }}
+
+{{- if .Values.auth.createSecret }}
+⚠  Secrets were created from chart values. For production prefer an
+   externally-managed secret:
+     kubectl create secret generic aiboo-secrets --from-literal=jwtSecret=… \
+       --from-literal=agentApiKey=… --from-literal=internalApiKey=… \
+       --from-literal=apiKeys=… --from-literal=cvIngestKey=… \
+       --from-literal=cvAuthToken=…
+   then reinstall with --set auth.createSecret=false
+{{- end }}
+
+⚠  The backend refuses to boot with empty/default secrets — if backend pods
+   CrashLoopBackOff, check: kubectl logs deploy/aiboo-backend

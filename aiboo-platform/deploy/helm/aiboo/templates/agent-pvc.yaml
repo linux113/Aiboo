@@ -1,0 +1,19 @@
+{{- if .Values.agent.queueStorage.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: aiboo-agent-queue
+  labels:
+    app.kubernetes.io/name: aiboo-agent
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/part-of: aiboo
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.agent.queueStorage.storageClassName }}
+  storageClassName: {{ .Values.agent.queueStorage.storageClassName }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.agent.queueStorage.size }}
+{{- end }}

@@ -1,8 +1,6 @@
-# Requires .dockerignore in same directory to exclude __pycache__, .env, etc.
+# UTF-8 everywhere; non-root; queue dir on a volume mount point.
 FROM python:3.11-slim
 
-# UTF-8 everywhere — engines log Unicode symbols and the default POSIX locale
-# of slim images (ascii/cp1252-style failures) previously crashed them.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONIOENCODING=utf-8 \
     LANG=C.UTF-8 \
@@ -13,9 +11,12 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
-EXPOSE 8001
+# Non-root runtime; /app/queue is the volume mount point (ALERT_QUEUE_DB_PATH)
+RUN useradd -m -u 1000 appuser \
+    && mkdir -p /app/queue \
+    && chown -R appuser:appuser /app
+USER appuser
 
-# API-only mode by default. For the full tri-gate orchestrator inside the
-# container set RUN_ORCHESTRATOR=true (docker-compose overrides this CMD
-# with the same entrypoint + flag when needed).
+EXPOSE 8001
+# API-only default; set RUN_ORCHESTRATOR=true (K8s values / compose) for full tri-gate.
 CMD ["python", "run_api.py"]

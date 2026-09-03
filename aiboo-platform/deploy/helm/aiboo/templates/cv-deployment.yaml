@@ -1,0 +1,91 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aiboo-cv
+  labels:
+    app.kubernetes.io/name: aiboo-cv
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/part-of: aiboo
+    app.kubernetes.io/component: cv
+spec:
+  replicas: {{ .Values.cv.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: aiboo-cv
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aiboo-cv
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/part-of: aiboo
+        app.kubernetes.io/component: cv
+    spec:
+      {{- if .Values.global.imagePullSecret }}
+      imagePullSecrets:
+        - name: {{ .Values.global.imagePullSecret }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: cv
+          image: "{{ .Values.global.imageRegistry }}{{ .Values.cv.image }}:{{ .Values.cv.tag }}"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 5050
+          env:
+            - name: CV_HOST
+              value: 0.0.0.0
+            - name: NODE_BACKEND
+              value: http://aiboo-backend:4000
+            - name: CV_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.secretName }}
+                  key: cvAuthToken
+            - name: CV_INGEST_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.secretName }}
+                  key: cvIngestKey
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: {{ .Values.cv.resources.requests.cpu }}
+              memory: {{ .Values.cv.resources.requests.memory }}
+            {{- if .Values.cv.gpu.enabled }}
+            nvidia.com/gpu: 1
+            {{- else }}
+            limits:
+              cpu: {{ .Values.cv.resources.limits.cpu }}
+              memory: {{ .Values.cv.resources.limits.memory }}
+            {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          {{- if .Values.cv.modelCache.enabled }}
+          volumeMounts:
+            - name: cv-models
+              mountPath: /app/models
+          {{- end }}
+      {{- if .Values.cv.modelCache.enabled }}
+      volumes:
+        - name: cv-models
+          persistentVolumeClaim:
+            claimName: aiboo-cv-models
+      {{- end }}

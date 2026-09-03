@@ -1,7 +1,7 @@
 # AiBoO — Production Readiness Report
 
 > Audit date: 2026-09-03 · Scope: `aiboo-platform/` (backend, frontend, agent, cv-service, deployment)
-> Status after this pass: **Phases 1–2 COMPLETE** (2.8 secrets manager + 2.7 formal unit suites + 2.9 log shipping remain) · Phases 3–4 pending
+> Status after this pass: **Phases 1–2 COMPLETE** · **Phase 3 K8s/Helm packaging COMPLETE** (GPU/TensorRT, WebRTC, OPA, multi-tenancy pending) · Phase 4 pending
 
 ---
 
@@ -241,15 +241,26 @@ K8s/GPU scale-out, SIEM/SOAR + compliance integration.
 | 2.10 | `express-mongo-sanitize`, SBOM (syft), SAST in CI | ◐ mongo-sanitize done · SBOM/SAST pending |
 
 ### Phase 3 — Scale & performance
-- **Kubernetes + Helm chart** (or docker-swarm if single-tenant): liveness/readiness probes (healthchecks exist), HPA on backend, ConfigMap/Secret injection.
+- **Kubernetes + Helm chart** — ✅ done (`deploy/helm/aiboo`, 18 templates):
+  backend Deployment + HPA (2→6 @70% CPU), frontend (unprivileged nginx),
+  agent (full orchestrator, queue on PVC), CV (model cache PVC, optional GPU),
+  optional in-cluster Mongo StatefulSet + Redis; liveness/readiness probes on
+  all services; non-root securityContexts everywhere; bring-your-own-secret
+  and bring-your-own-DB switches; nginx-class ingress (single same-origin
+  rule). Chart uses a deliberately portable Go-template subset —
+  `deploy/helm/validate-templates.py` renders+validates without helm, CI runs
+  real `helm lint` + 3 render variants. Guide: `deploy/DEPLOY_K8S.md`.
+  All images hardened: non-root users, dropped capabilities, `.dockerignore`
+  for frontend (new) + agent (config.ini/*.db excluded).
 - **CV on GPU nodes** (TensorRT/ONNX export of YOLOv8, shared model server via
-  Triton, batch frames) — one worker-thread-per-camera tops out ~10–20 streams
-  on CPU; model registry instead of per-container `yolov8n.pt` downloads.
-- **WebRTC/HLS** ingest instead of MJPEG `<img>` tiles (bandwidth, >50 cams).
+  Triton, batch frames) — ◐ `cv.gpu.enabled` scheduling + weights PVC done;
+  TensorRT image + batching pending. Model registry instead of per-container
+  `yolov8n.pt` downloads pending.
+- **WebRTC/HLS** ingest instead of MJPEG `<img>` tiles — ⬜ pending.
 - **Face recognition** upgrade from Haar detection to embedded-vector models
-  (ArcFace/FaceNet) with **PII policy** (GDPR: no faces at rest, vectors only).
-- Replace bespoke Zero-Trust PDP/PEP with **OPA/Cedar** policy engine.
-- Multi-tenancy: tenant_id scoping across all collections + per-tenant RBAC.
+  (ArcFace/FaceNet) with **PII policy** — ⬜ pending.
+- Replace bespoke Zero-Trust PDP/PEP with **OPA/Cedar** — ⬜ pending.
+- Multi-tenancy: tenant_id scoping across all collections + per-tenant RBAC — ⬜ pending.
 
 ### Phase 4 — Industry features (enterprise SOC parity)
 - **SIEM integration**: CEF/LEEF export, Splunk/Elastic/ Sentinel event forwarding.

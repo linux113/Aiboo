@@ -100,6 +100,26 @@ jobs:
       - run: python -m pytest tests/ -v --junitxml=test-results.xml 2>/dev/null || echo "No tests yet"
       - run: python -c "import app; print('Module loads OK')"
 
+  helm-lint:
+    name: Helm Chart Lint & Render
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+      - name: Portable-subset render check (no helm required)
+        run: python3 deploy/helm/validate-templates.py deploy/helm/aiboo
+      - name: helm lint (defaults)
+        run: helm lint deploy/helm/aiboo
+      - name: helm template (default + BYO-secret + GPU variants)
+        run: |
+          helm template aiboo deploy/helm/aiboo > /dev/null
+          helm template aiboo deploy/helm/aiboo \
+            --set mongo.enabled=false --set redis.enabled=false \
+            --set auth.createSecret=false > /dev/null
+          helm template aiboo deploy/helm/aiboo --set cv.gpu.enabled=true > /dev/null
+
   docker-build:
     name: Docker Build Check
     runs-on: ubuntu-latest

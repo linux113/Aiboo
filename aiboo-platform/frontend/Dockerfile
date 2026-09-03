@@ -1,6 +1,5 @@
 # ── Build stage ──────────────────────────────────────────────────
-# VITE_* vars are BAKED AT BUILD TIME by Vite — passing them as runtime
-# `environment:` entries does nothing. They must flow in as build ARGs.
+# VITE_* vars are BAKED AT BUILD TIME by Vite — they must flow in as build ARGs.
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
@@ -18,12 +17,10 @@ ENV VITE_API_URL=$VITE_API_URL \
 RUN npm run build
 
 # ── Runtime stage ────────────────────────────────────────────────
-FROM nginx:alpine
+# Unprivileged nginx: runs as uid 101 (no root master), same /etc/nginx/templates
+# envsubst mechanism as the official image. Listens on 5173 (>1024, allowed).
+FROM nginxinc/nginx-unprivileged:alpine
 COPY --from=builder /app/dist /usr/share/nginx/html
-
-# Official nginx image auto-envsubst's /etc/nginx/templates/*.template
-# into /etc/nginx/conf.d/. This lets us inject CV_AUTH_TOKEN at runtime
-# so the browser never sees service credentials (streams are proxied).
 COPY nginx.conf.template /etc/nginx/templates/default.conf.template
 
 EXPOSE 5173

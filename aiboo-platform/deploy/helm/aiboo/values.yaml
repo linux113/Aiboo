@@ -1,0 +1,117 @@
+# ─────────────────────────────────────────────────────────────────────
+# AiBoO Helm values
+# Secrets: EITHER set auth.createSecret=true + the 6 secret values
+# (dev/demo), OR create a secret yourself and point auth.secretName at it
+# (recommended for production — Vault/SealedSecrets/ExternalSecrets).
+# The backend ALSO enforces a boot guard: with default/empty secrets the
+# pods crash-loop with an explicit rotation checklist.
+# ─────────────────────────────────────────────────────────────────────
+
+global:
+  # Optional registry prefix, e.g. "ghcr.io/linux113/" (trailing slash).
+  imageRegistry: ""
+  # Optional name of an existing imagePullSecret (created out-of-band).
+  imagePullSecret: ""
+
+# One release per namespace — component names are fixed (aiboo-backend, …).
+auth:
+  # true  → chart creates the Secret (fill the values below)
+  # false → you manage the Secret; set secretName to its name
+  createSecret: true
+  secretName: aiboo-secrets
+  # Values below are used only when createSecret=true. Generate with:
+  #   openssl rand -hex 32
+  jwtSecret: ""
+  agentApiKey: ""
+  internalApiKey: ""
+  apiKeys: ""            # comma-separated service keys
+  cvIngestKey: ""
+  cvAuthToken: ""
+
+backend:
+  image: "aiboo-backend"
+  tag: "latest"
+  replicas: 2
+  # Leave empty ("") to use the in-cluster mongo service defined below.
+  mongoUri: ""
+  # Comma-separated browser origins (only needed if the SPA is served
+  # from a different origin than the ingress; same-origin needs none).
+  corsOrigins: ""
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 1Gi }
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+
+frontend:
+  image: "aiboo-frontend"
+  tag: "latest"
+  replicas: 2
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 200m, memory: 256Mi }
+
+agent:
+  image: "aiboo-agent"
+  tag: "latest"
+  replicas: 1            # one orchestrator instance per namespace
+  runOrchestrator: true  # full tri-gate + engines inside the container
+  # Action engines take REAL host actions — keep off unless you mean it.
+  enableCommandDashboard: true
+  enableAutonomousResponse: false
+  enableRealResponse: false
+  endpointName: "aiboo-agent-k8s"
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 1Gi }
+  queueStorage:
+    enabled: true        # PVC for the offline alert queue (SQLite)
+    size: 1Gi
+    storageClassName: ""
+
+cv:
+  image: "aiboo-cv"
+  tag: "latest"
+  replicas: 1
+  gpu:
+    enabled: false       # requires nvidia device plugin on the cluster
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { cpu: "2", memory: 4Gi }
+  modelCache:
+    enabled: true        # PVC so YOLO weights download once
+    size: 2Gi
+    storageClassName: ""
+
+# In-cluster MongoDB (StatefulSet + headless service).
+# For production prefer a managed DB: set enabled=false and point
+# backend.mongoUri at your Atlas/DocumentDB connection string.
+mongo:
+  enabled: true
+  image: "mongo:7"
+  storage:
+    size: 20Gi
+    storageClassName: ""
+
+# In-cluster Redis (revocation + rate limits + socket fan-out).
+# If disabled, backend falls back to in-memory stores (single-instance only).
+redis:
+  enabled: true
+  image: "redis:7-alpine"
+  storage:
+    enabled: true
+    size: 2Gi
+    storageClassName: ""
+
+ingress:
+  enabled: true
+  className: nginx
+  host: aiboo.local        # change to your domain
+  # All traffic routes to the frontend nginx which proxies /api, /socket.io,
+  # /cv-api, /agent-api to the right in-cluster services (same-origin model).
+  tls:
+    enabled: false
+    secretName: aiboo-tls
