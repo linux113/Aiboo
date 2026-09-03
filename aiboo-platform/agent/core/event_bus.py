@@ -75,4 +75,15 @@ class EventBus:
             log.warning("No subscribers for event type %s", event_type.__name__)
             return
         log.debug("Publishing %s to %d subscribers", event_type.__name__, len(handlers))
-        await asyncio.gather(*(h(event) for h in handlers))
+        # Fault isolation: one broken subscriber must not abort delivery to the
+        # remaining subscribers (previously a single raising handler crashed the
+        # whole publish — taking gates/agents off the bus).
+        results = await asyncio.gather(*(h(event) for h in handlers), return_exceptions=True)
+        for handler, result in zip(handlers, results):
+            if isinstance(result, Exception):
+                log.error(
+                    "Subscriber %s failed on %s: %s",
+                    getattr(handler, "__qualname__", handler),
+                    event_type.__name__,
+                    result,
+                )

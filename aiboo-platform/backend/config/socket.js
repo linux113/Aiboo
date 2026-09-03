@@ -1,4 +1,6 @@
 import { Server } from 'socket.io';
+import { createAdapter } from '@socket.io/redis-adapter';
+import { createClient } from 'redis';
 import jwt from 'jsonwebtoken';
 import logger from '../utils/logger.js';
 
@@ -20,6 +22,24 @@ export const initSocket = (httpServer) => {
       credentials: true,
     },
   });
+
+  // Multi-instance fan-out: when REDIS_URL is set, broadcast/emit replicate
+  // across every backend replica via the Redis adapter. Single-instance
+  // deployments keep the default in-memory adapter.
+  if (process.env.REDIS_URL) {
+    try {
+      const pub = createClient({ url: process.env.REDIS_URL });
+      const sub = pub.duplicate();
+      Promise.all([pub.connect(), sub.connect()])
+        .then(() => {
+          io.adapter(createAdapter(pub, sub));
+          logger.info('Socket.IO Redis adapter active (multi-instance mode)');
+        })
+        .catch((err) => logger.error(`Socket.IO redis adapter failed: ${err.message}`));
+    } catch (err) {
+      logger.warn(`Socket.IO redis adapter unavailable (${err.message}) — single-instance mode`);
+    }
+  }
 
   io.use((socket, next) => {
     const token = socket.handshake.auth?.token || socket.handshake.query?.token;

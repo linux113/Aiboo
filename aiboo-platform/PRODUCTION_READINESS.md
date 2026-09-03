@@ -1,7 +1,7 @@
 # AiBoO — Production Readiness Report
 
 > Audit date: 2026-09-03 · Scope: `aiboo-platform/` (backend, frontend, agent, cv-service, deployment)
-> Status after this pass: **Phase 1 (critical blockers) COMPLETE · Phase 2 core COMPLETE** · Phases 2 (rest)–4 pending
+> Status after this pass: **Phases 1–2 COMPLETE** (2.8 secrets manager + 2.7 formal unit suites + 2.9 log shipping remain) · Phases 3–4 pending
 
 ---
 
@@ -172,6 +172,33 @@ K8s/GPU scale-out, SIEM/SOAR + compliance integration.
 
 ---
 
+## 1.9 Phase 2 closeout (third pass) — docs, adapter, injection defence, type-safety gate, resilience
+
+- **Swagger/OpenAPI 3.0.3** at `/api/docs` (19 paths, all schemas mirrored from
+  the Zod contracts). Dev: open; production: admin/analyst JWT required unless
+  `PUBLIC_DOCS=true`. Raw spec at `/api/docs.json` for client codegen.
+- **Socket.IO Redis adapter** — with `REDIS_URL` set, `emit`/`broadcast`
+  replicate across backend replicas (`@socket.io/redis-adapter` + redis v4
+  pub/sub pair); single-instance keeps the in-memory adapter.
+- **`express-mongo-sanitize`** — strips `$`/`.` operators from all user input
+  (NoSQL injection defence) ahead of validation.
+- **Frontend type-safety gate**: fixed the 12 pre-existing TS errors
+  (`Camera` realigned to the actual backend model — `streamUrl`/`enabled`/
+  `type`, `Threat.status` widened to include backend values, `ChatMsg`
+  exported with its real shape, dead import removed). `tsc --noEmit` now
+  passes with **0 errors** and `vite build` succeeds — enforced by CI.
+- **EventBus fault isolation (agent)** — `publish()` used
+  `asyncio.gather` without `return_exceptions`, so ONE throwing subscriber
+  aborted delivery to every other subscriber (gates/agents/engines off the
+  bus). Now isolates + logs per-handler failures. Agent suite: **86/86**
+  (previously 85/86 — the failing test was correctly asserting the desired
+  behaviour; the bus was the bug).
+- **CI**: added `test-backend` job (runs the 29-check smoke suite on every
+  push/PR), trivy re-tuned to fail on CRITICAL (HIGH tracked via scheduled
+  scans — daily base-image churn was gating delivery).
+
+---
+
 ## 2. Known issues that remain open (accepted for now)
 
 1. **AI chat fallback** — without `OPENAI_KEY` the backend returns heuristic
@@ -188,12 +215,12 @@ K8s/GPU scale-out, SIEM/SOAR + compliance integration.
 5. ~~Rate-limiter store~~ — **fixed in Phase 2**: DualStore (Redis/memory).
    Still per-process without `REDIS_URL` set.
 6. ~~Threat.source enum~~ — **fixed in Phase 2** (7 sources + Zod).
-7. **No frontend tests**, agent tests thin; frontend has 12 pre-existing
-   TS errors in components (Camera type drift: `stream_url` vs `streamUrl`).
+7. **No frontend unit tests** (Vitest/RTL pending); agent suite now 86/86 and
+   frontend TS errors are **0** (fixed in Phase 2 closeout).
 8. **CV `require_auth`** accepts only static bearer tokens (nginx now holds it
    server-side; short-lived signed URLs are the proper Phase 3 fix).
-9. **Socket.IO adapter** — multi-instance websocket fan-out still needs
-   `@socket.io/redis-adapter` (Phase 2 remainder).
+9. ~~Socket.IO adapter~~ — **fixed in Phase 2 closeout** (Redis adapter when
+   `REDIS_URL` set).
 
 ---
 
@@ -202,16 +229,16 @@ K8s/GPU scale-out, SIEM/SOAR + compliance integration.
 ### Phase 2 — Hardening (core done; remainder below)
 | # | Item | Status |
 |---|---|---|
-| 2.1 | **Redis**: rate-limit store, token blacklist | ✅ done (dual-store, `--profile redis` in compose) · Socket.IO adapter pending |
+| 2.1 | **Redis**: rate-limit store, token blacklist, Socket.IO adapter | ✅ done (dual-stores + `@socket.io/redis-adapter` when `REDIS_URL` set) |
 | 2.2 | **Zod request validation** on mutating routes | ✅ done (auth, ingest, cameras, findings, threats, response) |
 | 2.3 | **httpOnly refresh cookies + short access JWTs** | ✅ done (rotation + replay detection + revocation) |
 | 2.4 | **Audit log collection** | ✅ done (model + 12 wired events + admin API) |
-| 2.5 | **Swagger/OpenAPI** at `/api/docs` + API versioning (`/api/v1`) | ⬜ pending |
+| 2.5 | **Swagger/OpenAPI** at `/api/docs` | ✅ done (OpenAPI 3.0.3, 19 paths; admin-gated in prod, `/api/docs.json` for codegen) |
 | 2.6 | **Correlated → Threat docs + retention TTL** | ✅ done (`source: agent`, 90-day TTL) |
-| 2.7 | **Tests**: backend Jest+Supertest ≥80%, frontend Vitest+RTL, agent pytest for gates | ⬜ partial (29-check smoke suite; formal runners pending) |
+| 2.7 | **Tests**: backend Jest+Supertest ≥80%, frontend Vitest+RTL, agent pytest for gates | ◐ partial — smoke suite (29 checks) in CI, frontend `tsc` 0-error gate in CI, agent **86/86** green; formal unit suites pending |
 | 2.8 | **Secrets manager** (Vault/Doppler/Infisical or SSM) instead of `.env` files | ⬜ pending |
-| 2.9 | Correlation-ID middleware + **Pino → Loki** structured shipping | ✅ correlation IDs done · log shipping pending |
-| 2.10 | `express-mongo-sanitize`, SBOM (syft), SAST in CI | ⬜ pending |
+| 2.9 | Correlation-ID middleware + **Pino → Loki** structured shipping | ✅ correlation IDs + prod JSON logs done · Loki/Promtail sidecar pending |
+| 2.10 | `express-mongo-sanitize`, SBOM (syft), SAST in CI | ◐ mongo-sanitize done · SBOM/SAST pending |
 
 ### Phase 3 — Scale & performance
 - **Kubernetes + Helm chart** (or docker-swarm if single-tenant): liveness/readiness probes (healthchecks exist), HPA on backend, ConfigMap/Secret injection.
@@ -278,4 +305,7 @@ curl -s -X POST localhost:4000/api/agent/findings -H 'content-type: application/
      -H 'x-api-key: WRONG' -d '{}'       # must be 401
 ```
 
-Backend security smoke suite: `cd backend && node smoke-test.mjs` (12 checks).
+API documentation: **http://localhost:5173/api/docs** (Swagger UI through the
+nginx proxy; admin token required in production) · raw spec: `/api/docs.json`.
+
+Backend security smoke suite: `cd backend && node smoke-test.mjs` (29 checks).

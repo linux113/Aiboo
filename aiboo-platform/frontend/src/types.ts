@@ -11,9 +11,20 @@ export type NavId =
 export interface Camera {
   _id: string;
   name: string;
-  location: string;
-  zone: string;
+  /** Backend Camera.streamUrl (RTSP / HTTP stream URL). */
+  streamUrl: string;
+  location?: string;
+  zone?: string;
+  enabled?: boolean;
+  type?: "ip" | "rtsp" | "mobile" | "usb";
   status: "online" | "offline" | "error";
+  resolution?: string;
+  fps?: number;
+  detectionEnabled?: boolean;
+  detectionTypes?: string[];
+  lastSeen?: string;
+  thumbnail?: string;
+  /** Legacy aliases kept for older code paths. */
   stream_url?: string;
   rtsp_url?: string;
   metadata?: Record<string, unknown>;
@@ -38,11 +49,28 @@ export interface Threat {
   source: string;
   asset: string;
   severity: "low" | "medium" | "high" | "critical";
-  status: "active" | "investigating" | "contained" | "resolved";
+  /**
+   * Backend enum: open | investigating | resolved.
+   * "active"/"contained" kept for UI map/filter compatibility.
+   */
+  status: "active" | "open" | "investigating" | "contained" | "resolved";
   timestamp: string;
   description?: string;
   actions?: string[];
   metadata?: Record<string, unknown>;
+}
+
+export interface ChatMsg {
+  id: number;
+  role: "assistant" | "user";
+  content: string;
+  /** Rendered as animated dots instead of content. */
+  isTyping?: boolean;
+  /** Assistant-message provenance chips. */
+  meta?: {
+    confidence?: number;
+    sources?: string;
+  };
 }
 
 export interface AgentFinding {

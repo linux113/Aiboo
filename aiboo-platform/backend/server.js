@@ -4,6 +4,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import hpp from 'hpp';
 import cookieParser from 'cookie-parser';
+import mongoSanitize from 'express-mongo-sanitize';
 import http from 'http';
 
 import { connectDB } from './config/db.js';
@@ -26,6 +27,7 @@ import dashboardRoutes from './routes/dashboard.routes.js';
 import agentRoutes, { seedDemoAgentData, hydrateStoreFromMongo } from './routes/agent.routes.js';
 import auditRoutes from './routes/audit.routes.js';
 import { requestId } from './middleware/requestId.js';
+import { openapiSpec } from './docs/swagger.js';
 
 // Fail fast on known-default secrets before anything binds a port.
 assertProductionSecrets();
@@ -66,6 +68,10 @@ app.use(hpp());
 app.use(cookieParser());
 app.use(express.json({ limit: '5mb' }));
 
+// Strip Mongo operators ($gt, $ne, $where…) from user input — NoSQL injection
+// defence. Runs after body/cookie parsing, before validation.
+app.use(mongoSanitize());
+
 // Correlation IDs — every request gets an id (propagated from nginx if present)
 app.use(requestId);
 
@@ -77,6 +83,28 @@ app.use((req, res, next) => {
 // ---- Health & root (no rate limiting) ----
 app.get('/', (req, res) => res.json({ service: 'AiBoO Backend', status: 'running' }));
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
+
+// ---- API documentation (Swagger UI) ----
+// Public in development; admin-only in production unless PUBLIC_DOCS=true.
+const docsEnabled = process.env.DOCS_ENABLED !== 'false';
+if (docsEnabled) {
+  const swaggerUi = (await import('swagger-ui-express')).default;
+  const docsGuard =
+    process.env.NODE_ENV === 'production' && process.env.PUBLIC_DOCS !== 'true'
+      ? protect
+      : (req, res, next) => next();
+  const { authorize: docsAuthorize } = await import('./middleware/auth.js');
+  app.use(
+    '/api/docs',
+    docsGuard,
+    process.env.NODE_ENV === 'production' && process.env.PUBLIC_DOCS !== 'true'
+      ? docsAuthorize('admin', 'analyst')
+      : (req, res, next) => next(),
+    swaggerUi.serve,
+    swaggerUi.setup(openapiSpec, { customSiteTitle: 'AiBoO API Docs' })
+  );
+  app.get('/api/docs.json', (req, res) => res.json(openapiSpec)); // spec for codegen
+}
 
 // ---- Routes with appropriate rate limiters ----
 app.use('/api/auth', authLimiter, authRoutes);                // Strict (20 per 15min)
