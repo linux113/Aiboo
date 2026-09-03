@@ -1,7 +1,7 @@
 # AiBoO — Production Readiness Report
 
 > Audit date: 2026-09-03 · Scope: `aiboo-platform/` (backend, frontend, agent, cv-service, deployment)
-> Status after this pass: **Phase 1 (critical blockers) COMPLETE** · Phases 2–4 pending
+> Status after this pass: **Phase 1 (critical blockers) COMPLETE · Phase 2 core COMPLETE** · Phases 2 (rest)–4 pending
 
 ---
 
@@ -102,39 +102,116 @@ K8s/GPU scale-out, SIEM/SOAR + compliance integration.
 
 ---
 
+## 1.8 Phase 2 core (second pass) — auth, validation, audit, data-model fixes
+
+### Critical data-loss bug fixed
+- **Detection enum dropped critical CV detections**: the model accepted 12
+  types, the CV service emits `fire`, `smoke`, `tamper`, `fall`,
+  `abandoned_object`, `line_cross`, `traffic_anomaly` → Mongoose
+  ValidationError → backend 500 → CV retried 3× → **detection silently lost**.
+  Enum widened to a superset of backend + CV types; smoke-verified `fire` now
+  stores (201).
+- **Confidence scale mismatch**: CV sends 0–1, schema/UI use 0–100 (tiles
+  rendered "0.85%"). `createDetection` normalises once at ingest.
+- **Critical fan-out**: `alert:critical` now fires for `fire`/`tamper`/`weapon`
+  and any `severity: critical` — previously only 3 legacy types.
+- **Frontend→backend contract gap**: dashboard quick-actions posted to
+  `/respond/lock-perimeter|quarantine|freeze-badge|throttle|war-room` which
+  **did not exist** (404). Implemented + audited, backed by a generic
+  `recordAction` (ResponseAction model widened).
+- **Correlated agent alerts now materialise as `Threat` documents**
+  (`source: 'agent'`; model enum widened from 3 to 7 sources) — they previously
+  lived only in the volatile in-memory store.
+- **Detection retention**: `expiresAt` + Mongo TTL index, default 90 days
+  (`DETECTION_RETENTION_DAYS`).
+
+### AuthN/AuthZ hardening
+- **Short-lived access JWT (`JWT_ACCESS_TTL`, default 1h) + rotating refresh
+  token in an httpOnly cookie** (`aiboo_refresh`, `Path=/api/auth`,
+  `SameSite=Lax`, `Secure` in prod). New endpoints: `POST /api/auth/refresh`
+  (single-use rotation — replays get 401) and `POST /api/auth/logout`
+  (revokes access + refresh).
+  - Found & fixed a subtle bug while testing: two JWTs signed in the same
+    second with identical payloads are **byte-identical** → rotation was a
+    no-op that then blacklisted itself. Every refresh token now carries a
+    unique `jti`.
+- **Token blacklist is dual-store**: sha256-keyed Map + Redis (`REDIS_URL`) —
+  cluster-wide and restart-safe revocation when Redis is present, zero-dependency
+  memory fallback when not. `protect` rejects refresh-tokens-used-as-access
+  (`typ` enforcement; legacy tokens still pass).
+- **Frontend**: axios interceptor does silent refresh + single retry on 401;
+  socket re-auth picks up the rotated token on `reconnect_attempt`; logout
+  calls the server before clearing storage.
+
+### Rate limiting
+- Custom **DualStore** (Redis when configured, else fixed-window memory) wired
+  into all 4 limiters; implements the v6.11/v7 `increment` contract.
+- **Limiters are always on** (the old `skip in development` removed) —
+  `RATE_LIMIT_DISABLED=true` is the explicit debug opt-out.
+
+### Input validation
+- **Zod** schemas for auth (register/login), detection ingest, camera CRUD,
+  agent findings, threat create, and response actions — 400 with field-level
+  issues instead of leaked Mongo cast/enum errors.
+
+### Audit trail & observability
+- **`AuditLog` model** (append-only, indexed) + fire-and-forget writer wired
+  into login/logout, camera CRUD + toggle + simulate, detection ack/escalate,
+  threat create/update, ALL response actions, and the new orchestration
+  endpoints. `GET /api/audit` (admin, paginated, filterable).
+- **Correlation IDs**: `X-Request-Id` propagated/minted per request, echoed in
+  responses, bound into pino logs and every audit entry.
+
+### Verification (second pass)
+| Check | Result |
+|---|---|
+| `smoke-test.mjs` (auth lifecycle, rotation, replay, revocation, zod 400s, fire ingest, confidence normalisation, Threat materialisation, orchestration routes, audit trail, request-ids) | **29/29 PASS** |
+| `node --check` on all 22 changed backend files | OK |
+| `npx tsc --noEmit` frontend | 0 errors in changed files (12 pre-existing errors in untouched components — backlog item) |
+| docker-compose YAML | valid |
+
+---
+
 ## 2. Known issues that remain open (accepted for now)
 
 1. **AI chat fallback** — without `OPENAI_KEY` the backend returns heuristic
    responses (by design); no circuit breaker yet.
-2. **JWT in `localStorage`** — XSS-stealable. Phase 2 moves to httpOnly
-   refresh-cookie rotation.
-3. **In-memory `correlated` / `gateDecisions` / `pseudoLocks`** — only findings
-   are persisted so far (correlated alerts should also create `Threat` docs).
-4. **`tokenBlacklist` Map** — in-memory; revocation resets on restart (Redis in Phase 2).
-5. **Rate-limiter store** — per-process memory; needs Redis before scaling horizontally.
-6. **`Threat.source` enum** (`firewall|camera|va-scan`) rejects agent sources
-   like `network_intrusion` — needs widening + Zod validation.
-7. **No frontend tests**, agent tests thin (7 real assertions before deps fix).
+2. ~~JWT in localStorage~~ — **fixed in Phase 2**: access token is short-lived
+   (1h default); the long-lived refresh token is httpOnly + rotated. The
+   1h access token is still in localStorage (accepted XSS blast radius;
+   move to in-memory + BFF pattern if threat model requires).
+3. **In-memory `correlated` / `gateDecisions` / `pseudoLocks`** — correlated
+   alerts now also materialise as `Threat` docs; gate decisions/locks still
+   volatile.
+4. ~~tokenBlacklist Map~~ — **fixed in Phase 2**: dual-store (Redis + memory
+   fallback), sha256 keys, TTLs.
+5. ~~Rate-limiter store~~ — **fixed in Phase 2**: DualStore (Redis/memory).
+   Still per-process without `REDIS_URL` set.
+6. ~~Threat.source enum~~ — **fixed in Phase 2** (7 sources + Zod).
+7. **No frontend tests**, agent tests thin; frontend has 12 pre-existing
+   TS errors in components (Camera type drift: `stream_url` vs `streamUrl`).
 8. **CV `require_auth`** accepts only static bearer tokens (nginx now holds it
    server-side; short-lived signed URLs are the proper Phase 3 fix).
+9. **Socket.IO adapter** — multi-instance websocket fan-out still needs
+   `@socket.io/redis-adapter` (Phase 2 remainder).
 
 ---
 
 ## 3. Pending backlog to be industry-grade (Phases 2–4)
 
-### Phase 2 — Hardening (next 2–4 weeks of work)
-| # | Item | Why it matters |
+### Phase 2 — Hardening (core done; remainder below)
+| # | Item | Status |
 |---|---|---|
-| 2.1 | **Redis** service: rate-limit store, token blacklist, Socket.IO adapter | multi-instance safety; revocation survives restarts |
-| 2.2 | **Zod/Joi request validation** on every mutating route | enum 500s, malformed payloads, mass-assignment |
-| 2.3 | **httpOnly refresh-token cookies** + short-lived access JWTs | kill localStorage XSS token theft |
-| 2.4 | **Audit log collection** (who acked/escalated/locked what, immutable) | SOC 2 / ISO 27001 evidence trail |
-| 2.5 | **Swagger/OpenAPI** at `/api/docs` + API versioning (`/api/v1`) | enterprise integration requirement |
-| 2.6 | **Correlated alerts → `Threat` documents** + retention TTL indexes on `Detection` | unbounded growth; restart-safe SOC state |
-| 2.7 | **Tests**: backend Jest+Supertest ≥80%, frontend Vitest+RTL, agent pytest for gates/engines; CI gate | right now 0 frontend tests |
-| 2.8 | **Secrets manager** (Vault/Doppler/Infisical or SSM) instead of `.env` files | rotation, least-privilege, no laptop-leak secrets |
-| 2.9 | Correlation-ID middleware + **Pino → Loki** structured log shipping | incident forensics |
-| 2.10 | `express-mongo-sanitize`, dependency SBOM (syft), SAST in CI (trivy tuned to fail CRITICAL only) | supply-chain hygiene |
+| 2.1 | **Redis**: rate-limit store, token blacklist | ✅ done (dual-store, `--profile redis` in compose) · Socket.IO adapter pending |
+| 2.2 | **Zod request validation** on mutating routes | ✅ done (auth, ingest, cameras, findings, threats, response) |
+| 2.3 | **httpOnly refresh cookies + short access JWTs** | ✅ done (rotation + replay detection + revocation) |
+| 2.4 | **Audit log collection** | ✅ done (model + 12 wired events + admin API) |
+| 2.5 | **Swagger/OpenAPI** at `/api/docs` + API versioning (`/api/v1`) | ⬜ pending |
+| 2.6 | **Correlated → Threat docs + retention TTL** | ✅ done (`source: agent`, 90-day TTL) |
+| 2.7 | **Tests**: backend Jest+Supertest ≥80%, frontend Vitest+RTL, agent pytest for gates | ⬜ partial (29-check smoke suite; formal runners pending) |
+| 2.8 | **Secrets manager** (Vault/Doppler/Infisical or SSM) instead of `.env` files | ⬜ pending |
+| 2.9 | Correlation-ID middleware + **Pino → Loki** structured shipping | ✅ correlation IDs done · log shipping pending |
+| 2.10 | `express-mongo-sanitize`, SBOM (syft), SAST in CI | ⬜ pending |
 
 ### Phase 3 — Scale & performance
 - **Kubernetes + Helm chart** (or docker-swarm if single-tenant): liveness/readiness probes (healthchecks exist), HPA on backend, ConfigMap/Secret injection.
@@ -187,6 +264,8 @@ cd aiboo-platform
 cp .env.example .env
 # fill every <generate-with-openssl-rand-hex-32> with real secrets
 docker compose up -d --build
+# optional hardened mode (cluster-wide revocation + rate limits):
+docker compose --profile redis up -d
 # frontend http://localhost:5173  (all traffic same-origin via nginx)
 ```
 

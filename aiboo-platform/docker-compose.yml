@@ -24,6 +24,24 @@ services:
       timeout: 10s
       retries: 3
 
+  # Optional but recommended for production: cluster-wide token revocation +
+  # rate limiting. Start with:  docker compose --profile redis up -d
+  redis:
+    image: redis:7-alpine
+    container_name: aiboo-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    profiles: ["redis"]
+    volumes:
+      - redis_data:/data
+    networks:
+      - aiboo-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   backend:
     build:
       context: ./backend
@@ -40,6 +58,10 @@ services:
       - PORT=4000
       - MONGO_URI=mongodb://mongodb:27017/aiboo
       - JWT_SECRET=${JWT_SECRET}
+      - JWT_ACCESS_TTL=${JWT_ACCESS_TTL:-1h}
+      - JWT_REFRESH_TTL=${JWT_REFRESH_TTL:-7d}
+      - REDIS_URL=${REDIS_URL:-}
+      - DETECTION_RETENTION_DAYS=${DETECTION_RETENTION_DAYS:-90}
       - AGENT_API_KEY=${AGENT_API_KEY}
       - API_KEYS=${API_KEYS}
       - CV_INGEST_KEY=${CV_INGEST_KEY}
@@ -157,6 +179,7 @@ services:
 
 volumes:
   mongo_data:
+  redis_data:
   cv_models:
   agent_queue:
 

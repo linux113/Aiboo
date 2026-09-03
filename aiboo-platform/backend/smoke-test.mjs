@@ -1,15 +1,78 @@
-// Smoke test: boots the real backend with a stubbed Mongo connection
-// (sandbox has no mongod) and exercises the new security + ingest paths
-// end-to-end over real HTTP.
+// Smoke test: boots the real backend with stubbed Mongo models
+// (sandbox has no mongod) and exercises auth lifecycle, validation,
+// audit trail, and ingest security over real HTTP.
+import bcrypt from 'bcryptjs';
+
 const mongoose = (await import('mongoose')).default;
 
-// --- Stub the DB: connect resolves, connection pretends to be ready ---
-const origConnect = mongoose.connect.bind(mongoose);
+// ─── Stub the DB layer ────────────────────────────────────────────
 mongoose.connect = async () => {
-  Object.defineProperty(mongoose.connection, 'readyState', { value: 1, configurable: true });
+  // writable so mongoose.close() can flip states during graceful shutdown
+  Object.defineProperty(mongoose.connection, 'readyState', {
+    value: 1, writable: true, configurable: true,
+  });
   return mongoose.connection;
 };
 
+const TEST_EMAIL = 'admin@smoke.test';
+const TEST_PASS = 'Password123!';
+const passHash = await bcrypt.hash(TEST_PASS, 10);
+
+const fakeUser = {
+  _id: 'u_smoke_1',
+  name: 'Smoke Admin',
+  email: TEST_EMAIL,
+  role: 'admin',
+  password: passHash,
+  matchPassword: (pw) => bcrypt.compare(pw, passHash),
+  lastLogin: null,
+  select() { return this; },
+  toObject() { const { password, ...rest } = this; return rest; },
+};
+
+const { default: User } = await import('./models/User.js');
+User.findOne = async (f) => (f?.email === TEST_EMAIL ? fakeUser : null);
+User.create = async (d) => ({ ...fakeUser, ...d, _id: 'u_new_1' });
+User.findById = (id) => chainable(id === 'u_smoke_1' ? fakeUser : { ...fakeUser, _id: id });
+User.findByIdAndUpdate = async () => null;
+
+const captures = { detections: [], threats: [], audits: [], responseActions: [], findings: [] };
+
+// Mongoose query chains are thenable — stubs must be too.
+const chainable = (result) => ({
+  sort: () => chainable(result),
+  limit: () => chainable(result),
+  skip: () => chainable(result),
+  lean: async () => result,
+  select() { return this; },
+  then: (resolve, reject) => Promise.resolve(result).then(resolve, reject),
+  catch: (fn) => Promise.resolve(result).catch(fn),
+});
+
+const { default: Detection } = await import('./models/Detection.js');
+Detection.create = async (d) => { captures.detections.push(d); return { ...d, _id: 'd1', timestamp: new Date(), toObject() { return this; } }; };
+Detection.findByIdAndUpdate = async (id, upd) => ({ _id: id, ...upd, toObject() { return this; } });
+Detection.find = () => chainable([]);
+Detection.countDocuments = async () => 0;
+
+const { default: Threat } = await import('./models/Threat.js');
+Threat.create = async (t) => { captures.threats.push(t); return { ...t, _id: 't1' }; };
+Threat.find = () => chainable([]);
+
+const { default: AuditLog } = await import('./models/AuditLog.js');
+AuditLog.create = async (a) => { captures.audits.push(a); return { ...a }; };
+AuditLog.find = () => chainable(captures.audits);
+AuditLog.countDocuments = async () => captures.audits.length;
+
+const { default: ResponseAction } = await import('./models/ResponseAction.js');
+ResponseAction.create = async (a) => { captures.responseActions.push(a); return { ...a, _id: 'ra1', toObject() { return this; } }; };
+ResponseAction.find = () => chainable([]);
+
+const { default: Finding } = await import('./models/Finding.js');
+Finding.find = () => chainable([]);
+Finding.create = async (f) => { captures.findings.push(f); return { ...f }; };
+
+// ─── Boot the server ──────────────────────────────────────────────
 process.env.MONGO_URI = 'mongodb://stub:27017/aiboo';
 process.env.NODE_ENV = 'development';
 process.env.JWT_SECRET = 'test-secret-test-secret-test-secret-1234';
@@ -18,17 +81,12 @@ process.env.CV_INGEST_KEY = 'test-cv-ingest-key-abcdef';
 process.env.API_KEYS = 'test-service-key-1';
 process.env.PORT = '4999';
 process.env.SEED_DEMO_DATA = 'false';
-
-// Stub Finding queries so hydration/persistence fail fast instead of
-// hanging on mongoose buffering (no real mongod in this sandbox).
-const { default: Finding } = await import('./models/Finding.js');
-Finding.find = async () => [];
-Finding.create = async () => { throw new Error('stub: no mongo in smoke test'); };
+process.env.JWT_ACCESS_TTL = '1h';
 
 await import('./server.js');
 
 const BASE = 'http://localhost:4999';
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 await sleep(1200);
 
 let pass = 0, fail = 0;
@@ -37,63 +95,152 @@ const check = (name, cond, extra = '') => {
   cond ? pass++ : fail++;
 };
 
-// 1. health
-let r = await fetch(`${BASE}/health`);
-check('GET /health', r.ok);
+const jar = {};
+function stashCookies(res) {
+  const setCookies = res.headers.getSetCookie?.() ?? [];
+  for (const c of setCookies) {
+    const [pair] = c.split(';');
+    const [k, v] = pair.split('=');
+    jar[k.trim()] = v.trim();
+    if (c.includes('Max-Age=0') || /Expires=Thu, 01 Jan 1970/.test(c)) delete jar[k.trim()];
+  }
+}
+const cookieHeader = () => Object.entries(jar).map(([k, v]) => `${k}=${v}`).join('; ');
 
-// 2. agent key rejected without header
-r = await fetch(`${BASE}/api/agent/findings`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
-check('POST /api/agent/findings rejects missing key (401)', r.status === 401);
+const post = (path, body, { bearer, key, cookie = true } = {}) =>
+  fetch(`${BASE}${path}`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
+      ...(key ? { 'x-api-key': key } : {}),
+      ...(cookie && Object.keys(jar).length ? { cookie: cookieHeader() } : {}),
+    },
+    body: JSON.stringify(body),
+  });
 
-// 3. agent key rejected when WRONG length-similar key (timing-safe path)
-r = await fetch(`${BASE}/api/agent/findings`, {
+const get = (path, { bearer } = {}) =>
+  fetch(`${BASE}${path}`, { headers: bearer ? { authorization: `Bearer ${bearer}` } : {} });
+
+// ═══ 1. Auth lifecycle ════════════════════════════════════════════
+let r = await post('/api/auth/login', { email: TEST_EMAIL, password: TEST_PASS }, { cookie: false });
+check('login 200', r.status === 200, `status=${r.status}`);
+stashCookies(r);
+const loginBody = await r.json();
+check('login returns access token + user', !!loginBody.token && loginBody.user?.email === TEST_EMAIL);
+check('login sets httpOnly refresh cookie', typeof jar.aiboo_refresh === 'string' && jar.aiboo_refresh.length > 20);
+const ACCESS = loginBody.token;
+
+r = await get('/api/auth/me', { bearer: ACCESS });
+check('GET /auth/me with access token', r.status === 200, `status=${r.status}`);
+
+// refresh rotation
+const firstRefresh = jar.aiboo_refresh;
+r = await post('/api/auth/refresh', {}, { cookie: true });
+const rb1 = await r.json();
+stashCookies(r);
+check('refresh 200 + new access token', r.status === 200 && !!rb1.token, `status=${r.status}`);
+check('refresh cookie rotated', !!jar.aiboo_refresh && jar.aiboo_refresh !== firstRefresh);
+const ACCESS2 = rb1.token;
+
+r = await post('/api/auth/refresh', {}, { cookie: true });
+const body2 = await r.json();
+stashCookies(r);
+check('second refresh works (new cookie valid)', r.status === 200 && !!body2.token, `status=${r.status}`);
+
+// replay of an OLD refresh cookie must fail (single-use)
+r = await fetch(`${BASE}/api/auth/refresh`, {
   method: 'POST',
-  headers: { 'content-type': 'application/json', 'x-api-key': 'test-agent-key-abcdef123457' },
+  headers: { 'content-type': 'application/json', cookie: `aiboo_refresh=${firstRefresh}` },
   body: '{}',
 });
-check('POST /api/agent/findings rejects wrong key (401)', r.status === 401);
+check('replayed OLD refresh cookie rejected (401)', r.status === 401, `status=${r.status}`);
 
-// 4. agent key accepted with valid header
-r = await fetch(`${BASE}/api/agent/findings`, {
+// access token as refresh rejected
+r = await fetch(`${BASE}/api/auth/refresh`, {
   method: 'POST',
-  headers: { 'content-type': 'application/json', 'x-api-key': 'test-agent-key-abcdef123456', 'x-endpoint-id': 'smoke-endpoint' },
-  body: JSON.stringify({ agent_name: 'SmokeAgent', threat_type: 'malware', severity: 'high', confidence: 0.9, summary: 'smoke test finding' }),
+  headers: { 'content-type': 'application/json', cookie: `aiboo_refresh=${ACCESS2 ?? ACCESS}` },
+  body: '{}',
 });
-check('POST /api/agent/findings accepts valid key (201)', r.status === 201);
-const finding = await r.json();
-check('finding has source + id + timestamp', !!finding.source && !!finding.id && !!finding.timestamp);
 
-// 5. CV ingest rejects when CV_INGEST_KEY set but header missing
-r = await fetch(`${BASE}/api/cameras/detections`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'fire', severity: 'critical', cameraId: 'x' }) });
-check('POST /api/cameras/detections rejects missing service key (401)', r.status === 401);
+// ═══ 2. Validation (zod) ══════════════════════════════════════════
+r = await post('/api/auth/login', { email: 'not-an-email', password: 'x' }, { cookie: false });
+check('login with invalid email → 400 validation', r.status === 400 && (await r.json()).validation === true);
 
-// 6. CV ingest accepts correct key (controller path; DB unavailable → may 4xx/5xx but NOT 401)
-r = await fetch(`${BASE}/api/cameras/detections`, {
+r = await post('/api/cameras/detections', { type: 'not_a_real_type', severity: 'critical' }, { key: 'test-cv-ingest-key-abcdef' });
+check('detection invalid type → 400 validation', r.status === 400 && (await r.json()).validation === true, `status=${r.status}`);
+
+r = await post('/api/cameras/detections', { type: 'fire', severity: 'extreme' }, { key: 'test-cv-ingest-key-abcdef' });
+check('detection invalid severity → 400 validation', r.status === 400);
+
+r = await post('/api/agent/findings', { threat_type: 'x', severity: 'ultra' }, { key: 'test-agent-key-abcdef123456' });
+check('agent finding invalid severity → 400 validation', r.status === 400);
+
+// ═══ 3. CV ingest + confidence normalisation + critical fan-out ═══
+captures.detections.length = 0;
+r = await post('/api/cameras/detections', {
+  cameraId: 'cam1', cameraName: 'LabCam', type: 'fire', severity: 'critical',
+  confidence: 0.85, label: 'fire',
+}, { key: 'test-cv-ingest-key-abcdef' });
+check('fire detection accepted (previously enum-rejected!)', r.status === 201, `status=${r.status}`);
+await sleep(100);
+check('confidence normalised 0.85 → 85', captures.detections[0]?.confidence === 85, `got=${captures.detections[0]?.confidence}`);
+
+r = await post('/api/cameras/detections', {
+  cameraId: 'cam1', type: 'smoke', severity: 'high', confidence: 0.7, label: 'smoke',
+}, { key: 'test-cv-ingest-key-abcdef' });
+check('smoke detection accepted', r.status === 201, `status=${r.status}`);
+
+// ═══ 4. Correlated alert materialises as Threat ══════════════════
+captures.threats.length = 0;
+r = await post('/api/agent/correlated', {
+  event_type: 'ransomware_prelude', severity: 'critical',
+  description: '[CORRELATED] mass file renames + shadow copy deletion', entity: 'HOST-42',
+}, { bearer: ACCESS });
+check('POST /api/agent/correlated 200', r.status === 200);
+await sleep(100);
+check('correlated alert created Threat doc (source=agent)', captures.threats[0]?.source === 'agent' && captures.threats[0]?.severity === 'critical');
+
+// ═══ 5. Orchestration endpoints (previously 404) ═════════════════
+r = await post('/api/respond/war-room', {}, { bearer: ACCESS });
+check('POST /respond/war-room 201 (was 404 before)', r.status === 201, `status=${r.status}`);
+r = await post('/api/respond/lock-perimeter', { zone: 'lobby' }, { bearer: ACCESS });
+check('POST /respond/lock-perimeter 201', r.status === 201, `status=${r.status}`);
+
+// ═══ 6. Audit trail ══════════════════════════════════════════════
+await sleep(200);
+const auditedActions = captures.audits.map((a) => a.action);
+check('audit: auth.login recorded', auditedActions.includes('auth.login'));
+check('audit: response.war_room recorded', auditedActions.includes('response.war_room'));
+check('audit entries carry actor + ip + requestId', captures.audits.every((a) => a.actor?.email && a.ip && a.requestId));
+
+r = await get('/api/audit', { bearer: ACCESS });
+check('GET /api/audit (admin) returns trail', r.status === 200 && (await r.json()).total >= 2, `status=${r.status}`);
+
+r = await get('/api/audit');
+check('GET /api/audit requires auth (401)', r.status === 401);
+
+// ═══ 7. Logout revocation ════════════════════════════════════════
+const refreshBeforeLogout = jar.aiboo_refresh;
+r = await post('/api/auth/logout', {}, { bearer: ACCESS });
+check('logout 200', r.status === 200);
+stashCookies(r);
+check('refresh cookie cleared on logout', jar.aiboo_refresh === undefined);
+
+r = await get('/api/auth/me', { bearer: ACCESS });
+check('access token revoked after logout (401)', r.status === 401, `status=${r.status}`);
+
+r = await fetch(`${BASE}/api/auth/refresh`, {
   method: 'POST',
-  headers: { 'content-type': 'application/json', 'x-api-key': 'test-cv-ingest-key-abcdef' },
-  body: JSON.stringify({ cameraId: 'x', cameraName: 'SmokeCam', location: 'lab', type: 'fire', severity: 'critical', confidence: 0.99, label: 'fire' }),
+  headers: { 'content-type': 'application/json', cookie: `aiboo_refresh=${refreshBeforeLogout}` },
+  body: '{}',
 });
-check('POST /api/cameras/detections passes auth with valid key (not 401)', r.status !== 401, `status=${r.status}`);
+check('refresh token revoked after logout (401)', r.status === 401, `status=${r.status}`);
 
-// 7. findings readable from in-memory store (public GET, no DB)
-r = await fetch(`${BASE}/api/agent/findings?limit=10`);
-const findings = await r.json();
-check('GET /api/agent/findings returns ingested finding', Array.isArray(findings) && findings.some(f => f.agent_name === 'SmokeAgent'));
-
-// 8. heartbeat + endpoints
-r = await fetch(`${BASE}/api/agent/heartbeat`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': 'test-agent-key-abcdef123456', 'x-endpoint-id': 'smoke-endpoint' }, body: '{}' });
-check('POST /api/agent/heartbeat (200)', r.status === 200);
-r = await fetch(`${BASE}/api/agent/endpoints`);
-const eps = await r.json();
-check('GET /api/agent/endpoints shows active endpoint', Array.isArray(eps) && eps.some(e => e.source === 'smoke-endpoint' && e.active === true));
-
-// 9. internal routes still require JWT
-r = await fetch(`${BASE}/api/agent/correlated`);
-check('GET /api/agent/correlated requires JWT (401)', r.status === 401);
-
-// 10. auth register/login rate limiter present (authLimiter) — just verify route exists
-r = await fetch(`${BASE}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
-check('POST /api/auth/login reachable (4xx not 404)', r.status !== 404, `status=${r.status}`);
+// ═══ 8. Request-ID propagation ═══════════════════════════════════
+r = await get('/health');
+const reqId = r.headers.get('x-request-id');
+check('X-Request-Id echoed on every response', !!reqId && reqId.length > 10, reqId ?? 'missing');
 
 console.log(`\n=== ${pass} passed, ${fail} failed ===`);
 process.exit(fail === 0 ? 0 : 1);

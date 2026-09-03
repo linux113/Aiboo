@@ -40,6 +40,8 @@ export function clearToken() {
 const api = axios.create({
   baseURL: API,
   timeout: 15000,
+  // Refresh token lives in an httpOnly cookie — send cookies on every call.
+  withCredentials: true,
 });
 
 api.interceptors.request.use((config) => {
@@ -50,10 +52,52 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// Silent refresh: on a 401 (expired short-lived access token) try
+// POST /auth/refresh once — the httpOnly cookie rotates — then retry the
+// original request. Only when refresh itself fails do we log out.
+let refreshing: Promise<string | null> | null = null;
+
+async function tryRefresh(): Promise<string | null> {
+  if (!refreshing) {
+    refreshing = axios
+      .post(`${API}/auth/refresh`, {}, { withCredentials: true, timeout: 10000 })
+      .then((res) => {
+        const token: string | undefined = res.data?.token;
+        if (token) {
+          setToken(token);
+          return token;
+        }
+        return null;
+      })
+      .catch(() => null)
+      .finally(() => {
+        // allow a future refresh cycle after this one settles
+        setTimeout(() => { refreshing = null; }, 100);
+      });
+  }
+  return refreshing;
+}
+
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
-    if (error.response?.status === 401) {
+  async (error) => {
+    const status = error.response?.status;
+    const url: string = error.config?.url ?? "";
+    const isAuthPath = url.includes("/auth/login") || url.includes("/auth/register") || url.includes("/auth/refresh");
+    const cfg = error.config as (import("axios").AxiosRequestConfig & { __retried?: boolean }) | undefined;
+    const alreadyRetried = cfg?.__retried === true;
+
+    if (status === 401 && !isAuthPath && cfg && !alreadyRetried) {
+      const token = await tryRefresh();
+      if (token) {
+        cfg.__retried = true;
+        cfg.headers = { ...(cfg.headers as Record<string, string>), Authorization: `Bearer ${token}` };
+        return api.request(cfg);
+      }
+      logger.warn("401 + refresh failed — redirecting to login");
+      clearToken();
+      window.location.reload();
+    } else if (status === 401 && !isAuthPath) {
       logger.warn("401 Unauthorized — redirecting to login");
       clearToken();
       window.location.reload();

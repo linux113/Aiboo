@@ -3,6 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import hpp from 'hpp';
+import cookieParser from 'cookie-parser';
 import http from 'http';
 
 import { connectDB } from './config/db.js';
@@ -23,6 +24,8 @@ import responseRoutes from './routes/response.routes.js';
 import aiRoutes from './routes/ai.routes.js';
 import dashboardRoutes from './routes/dashboard.routes.js';
 import agentRoutes, { seedDemoAgentData, hydrateStoreFromMongo } from './routes/agent.routes.js';
+import auditRoutes from './routes/audit.routes.js';
+import { requestId } from './middleware/requestId.js';
 
 // Fail fast on known-default secrets before anything binds a port.
 assertProductionSecrets();
@@ -60,10 +63,14 @@ app.use(cors({
   credentials: true,
 }));
 app.use(hpp());
+app.use(cookieParser());
 app.use(express.json({ limit: '5mb' }));
 
+// Correlation IDs — every request gets an id (propagated from nginx if present)
+app.use(requestId);
+
 app.use((req, res, next) => {
-  logger.info(`${req.method} ${req.originalUrl}`);
+  logger.info({ reqId: req.requestId }, `${req.method} ${req.originalUrl}`);
   next();
 });
 
@@ -80,6 +87,7 @@ app.use('/api/identities', apiLimiter, identityRoutes);
 app.use('/api/respond', apiLimiter, responseRoutes);
 app.use('/api/ai', apiLimiter, aiRoutes);
 app.use('/api/dashboard', apiLimiter, dashboardRoutes);
+app.use('/api/audit', apiLimiter, auditRoutes);
 
 // ✅ Agent routes now use agentLimiter (more permissive)
 app.use('/api/agent', agentLimiter, agentRoutes);

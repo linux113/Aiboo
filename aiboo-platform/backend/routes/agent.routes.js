@@ -4,8 +4,12 @@ import mongoose from 'mongoose';
 import { getIO } from '../config/socket.js';
 import { protect, authorize } from '../middleware/auth.js';
 import { safeEqual } from '../middleware/security.js';
+import { validate } from '../middleware/validate.js';
+import { agentFindingSchema } from '../schemas/index.js';
+import { audit } from '../utils/audit.js';
 import logger from '../utils/logger.js';
 import Finding from '../models/Finding.js';
+import Threat from '../models/Threat.js';
 
 const router = express.Router();
 
@@ -130,7 +134,7 @@ const updateEndpointHeartbeat = (source) => {
 // ============================================================
 
 // POST /api/agent/findings – Agent sends a detection
-router.post('/findings', validateAgentApiKey, async (req, res) => {
+router.post('/findings', validateAgentApiKey, validate({ body: agentFindingSchema }), async (req, res) => {
   try {
     const {
       agent_name,
@@ -230,6 +234,22 @@ router.post('/finding', protect, (req, res) => {
 router.post('/correlated', protect, (req, res) => {
   push(store.correlated, req.body);
   emit('agent:correlated', req.body);
+
+  // Materialise correlated alerts as Threat documents so they persist, are
+  // filterable in the Intelligence module and survive restarts.
+  if (req.body && req.body.severity && req.body.description) {
+    Threat.create({
+      severity: ['critical', 'high', 'medium', 'low'].includes(req.body.severity)
+        ? req.body.severity
+        : 'medium',
+      title: `Agent correlation: ${req.body.event_type || req.body.threat_type || 'converged event'}`,
+      description: req.body.description,
+      source: 'agent',
+      status: 'open',
+      ...(req.body.entity ? { asset: String(req.body.entity).slice(0, 200) } : {}),
+    }).catch((err) => logger.error(`Threat materialise failed: ${err.message}`));
+  }
+
   if (['critical', 'high'].includes(req.body.severity))
     emit('alert:critical', { ...req.body, message: req.body.description });
   res.json({ ok: true });
