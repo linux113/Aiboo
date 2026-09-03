@@ -63,6 +63,9 @@ First user you register in the UI becomes admin — data persists in the
 **`aiboo: real stack up`** or the compound **🚀 Real hybrid stack** (F5, with
 breakpoints — see VSCODE_GUIDE.md).
 
+> Shareable PDF handout (run + test guide for other systems):
+> `python3 scripts/make-run-guide-pdf.py` → `AIBOO_REAL_RUN_AND_TEST_GUIDE.pdf`
+
 ---
 
 ### 1. Prerequisites
