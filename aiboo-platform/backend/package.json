@@ -21,6 +21,7 @@
     "express-rate-limit": "^6.7.0",
     "helmet": "^7.0.0",
     "hpp": "^0.2.3",
+    "http-proxy": "^1.18.1",
     "ioredis": "^6.0.0",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.23.0",
