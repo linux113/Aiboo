@@ -1,7 +1,7 @@
 # AiBoO — Production Readiness Report
 
 > Audit date: 2026-09-03 · Scope: `aiboo-platform/` (backend, frontend, agent, cv-service, deployment)
-> Status after this pass: **Phases 1–2 COMPLETE** · **Phase 3 K8s/Helm packaging COMPLETE** (GPU/TensorRT, WebRTC, OPA, multi-tenancy pending) · Phase 4 pending
+> Status after this pass: **Phases 1–2 COMPLETE · Phase 3 K8s/Helm COMPLETE · Phase 4 notification fabric + CEF SIEM forwarding COMPLETE** (SOAR playbooks, threat-intel feeds, compliance packs pending)
 
 ---
 
@@ -263,15 +263,22 @@ K8s/GPU scale-out, SIEM/SOAR + compliance integration.
 - Multi-tenancy: tenant_id scoping across all collections + per-tenant RBAC — ⬜ pending.
 
 ### Phase 4 — Industry features (enterprise SOC parity)
-- **SIEM integration**: CEF/LEEF export, Splunk/Elastic/ Sentinel event forwarding.
-- **SOAR playbooks**: webhook/queue-driven response actions with approval gates.
-- **Notification fabric**: Slack/Teams/PagerDuty/SMTP on `alert:critical`.
+- **Notification fabric** — ✅ done: `alert:critical` now funnels through
+  `utils/alerts.js` → notification service with Slack (blocks), PagerDuty
+  (Events API v2, dedup keys), **generic HMAC-signed webhooks**
+  (`X-Aiboo-Signature: sha256=…`), and **SIEM CEF forwarding**. Per-event
+  dedupe (60s), exponential-backoff retries (5 attempts), dead-letter
+  `notification.failed` audit entries, admin API
+  (`GET /channels`, `POST /test`, `GET /history`), all env-driven.
+- **SIEM integration**: first pass ✅ (CEF events via HTTP collector);
+  Splunk HEC auth headers + LEEF pending.
+- **SOAR playbooks**: webhook/queue-driven response actions with approval gates — ⬜ pending.
 - **Threat intel feeds**: MISP, AbuseIPDB, VirusTotal enrichment in
-  `threat_intelligence_engine` (currently static heuristics).
+  `threat_intelligence_engine` (currently static heuristics) — ⬜ pending.
 - **Compliance engine**: real NIST 800-53 / CIS benchmark rule packs, PDF audit
-  reports, data-retention policies (90-day detections), Mongo encryption-at-rest
-  (CSFLE), S3 + lifecycle rules for snapshots.
-- **Pen test + bug bounty** before any external exposure.
+  reports, data-retention policies, Mongo encryption-at-rest (CSFLE), S3 +
+  lifecycle rules for snapshots — ◐ retention done (90-day TTL) · rest pending.
+- **Pen test + bug bounty** before any external exposure — ⬜ pending.
 
 ---
 

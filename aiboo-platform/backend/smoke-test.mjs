@@ -2,6 +2,8 @@
 // (sandbox has no mongod) and exercises auth lifecycle, validation,
 // audit trail, and ingest security over real HTTP.
 import bcrypt from 'bcryptjs';
+import crypto from 'node:crypto';
+import http from 'node:http';
 
 const mongoose = (await import('mongoose')).default;
 
@@ -82,12 +84,35 @@ process.env.API_KEYS = 'test-service-key-1';
 process.env.PORT = '4999';
 process.env.SEED_DEMO_DATA = 'false';
 process.env.JWT_ACCESS_TTL = '1h';
+// Notification fabric: real receiver on 4990, deliberately-dead SIEM on 4991
+process.env.ALERT_WEBHOOK_URL = 'http://localhost:4990/hook';
+process.env.SIEM_WEBHOOK_URL = 'http://localhost:4991/nope';
+process.env.NOTIFICATION_HMAC_SECRET = 'test-hmac-secret';
+process.env.NOTIFICATION_TICK_MS = '40';
+process.env.NOTIFICATION_RETRY_DELAY_MS = '20';
+process.env.NOTIFICATION_MAX_ATTEMPTS = '3';
+process.env.ALERT_NOTIFY_SEVERITIES = 'critical';
 
 await import('./server.js');
 
 const BASE = 'http://localhost:4999';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 await sleep(1200);
+
+// Local webhook receiver capturing raw bodies + headers
+const received = [];
+const receiver = http.createServer((req, res) => {
+  const chunks = [];
+  req.on('data', (c) => chunks.push(c));
+  req.on('end', () => {
+    const raw = Buffer.concat(chunks).toString();
+    let body = null; try { body = JSON.parse(raw); } catch { /* non-json */ }
+    received.push({ path: req.url, headers: req.headers, raw, body });
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{"ok":true}');
+  });
+});
+await new Promise((r) => receiver.listen(4990, r));
 
 let pass = 0, fail = 0;
 const check = (name, cond, extra = '') => {
@@ -212,13 +237,48 @@ await sleep(200);
 const auditedActions = captures.audits.map((a) => a.action);
 check('audit: auth.login recorded', auditedActions.includes('auth.login'));
 check('audit: response.war_room recorded', auditedActions.includes('response.war_room'));
-check('audit entries carry actor + ip + requestId', captures.audits.every((a) => a.actor?.email && a.ip && a.requestId));
+const reqAudits = captures.audits.filter((a) => a.requestId);
+check('audit entries carry actor + ip + requestId', reqAudits.length > 0 && reqAudits.every((a) => a.actor?.email && a.ip && a.requestId));
 
 r = await get('/api/audit', { bearer: ACCESS });
 check('GET /api/audit (admin) returns trail', r.status === 200 && (await r.json()).total >= 2, `status=${r.status}`);
 
 r = await get('/api/audit');
 check('GET /api/audit requires auth (401)', r.status === 401);
+
+// ═══ 6b. Notification fabric (webhook + HMAC + dedupe + dead-letter) ═══
+await sleep(700); // allow tick -> dispatch
+const generic = received.filter((x) => x.path === '/hook');
+check('generic webhook received fire alert', generic.some((x) => x.body?.event?.type === 'fire'));
+const signed = generic.find((x) => x.headers['x-aiboo-signature']);
+check('webhook carries HMAC signature header', !!signed);
+if (signed) {
+  const expected = crypto.createHmac('sha256', 'test-hmac-secret').update(signed.raw).digest('hex');
+  check('HMAC signature verifies against raw body', signed.headers['x-aiboo-signature'] === `sha256=${expected}`);
+} else { check('HMAC signature verifies against raw body', false, 'no signed delivery'); }
+
+// dedupe: same fire within cooldown -> no additional dispatch
+received.length = 0;
+r = await post('/api/cameras/detections', { cameraId: 'cam1', cameraName: 'LabCam', type: 'fire', severity: 'critical', confidence: 0.9 }, { key: 'test-cv-ingest-key-abcdef' });
+check('duplicate fire still stored (201)', r.status === 201);
+await sleep(400);
+check('duplicate fire deduped — no 2nd webhook', received.filter((x) => x.body?.event?.type === 'fire').length === 0);
+
+// admin API
+r = await post('/api/notifications/test', {}, { bearer: ACCESS });
+check('POST /api/notifications/test 202 (audited)', r.status === 202);
+await sleep(300);
+check('test alert delivered to webhook', received.some((x) => x.body?.event?.type === 'notification.test'));
+r = await get('/api/notifications/channels', { bearer: ACCESS });
+const ch = await r.json();
+check('GET /api/notifications/channels lists configured channels', r.status === 200 && (ch.channels?.length ?? 0) >= 2, `channels=${ch.channels?.length}`);
+r = await get('/api/notifications/channels');
+check('channels endpoint requires auth (401)', r.status === 401);
+await sleep(900); // retries 20+40ms + ticks -> dead-letter
+r = await get('/api/notifications/history', { bearer: ACCESS });
+const hist = await r.json();
+check('history records dead SIEM channel as failed', hist.items?.some((i) => i.channel === 'siem' && i.status === 'failed'));
+check('dead-letter audit written for failed channel', captures.audits.some((a) => a.action === 'notification.failed' && a.details?.channel === 'siem'));
 
 // ═══ 7. Logout revocation ════════════════════════════════════════
 const refreshBeforeLogout = jar.aiboo_refresh;

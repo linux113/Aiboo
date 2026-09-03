@@ -1,6 +1,7 @@
 import Camera from '../models/Camera.js';
 import Detection from '../models/Detection.js';
 import { getIO } from '../config/socket.js';
+import { emitCritical } from '../utils/alerts.js';
 
 const emit = (event, data) => { try { getIO().emit(event, data); } catch {} };
 
@@ -58,10 +59,11 @@ export const createDetection = async (data) => {
     ['weapon_gun', 'weapon_knife', 'weapon', 'face_watchlist', 'fire', 'tamper'].includes(data.type) ||
     data.severity === 'critical'
   ) {
-    emit('alert:critical', {
+    emitCritical({
       type: data.type, cameraId: data.cameraId,
       cameraName: data.cameraName, location: data.location,
-      confidence: detection.confidence, timestamp: detection.timestamp,
+      confidence: detection.confidence, severity: data.severity || 'critical',
+      timestamp: detection.timestamp,
       message: buildAlertMessage(data),
     });
   }

@@ -243,6 +243,21 @@ export const openapiSpec = {
       },
     },
 
+    '/api/notifications/channels': {
+      get: { tags: ['Respond'], summary: 'Configured alert channels + queue depth (admin)', security: bearer, responses: { '200': { description: 'Channel status list' } } },
+    },
+    '/api/notifications/test': {
+      post: {
+        tags: ['Respond'], summary: 'Force a test alert through every channel (audited)',
+        description: 'Delivers a `notification.test` critical event to Slack / PagerDuty / generic webhook / SIEM CEF — bypasses dedupe.',
+        security: bearer,
+        responses: { '202': { description: 'Queued' } },
+      },
+    },
+    '/api/notifications/history': {
+      get: { tags: ['Respond'], summary: 'Recent dispatch results (sent/failed)', security: bearer, responses: { '200': { description: 'Dispatch history' } } },
+    },
+
     '/health': {
       get: { tags: ['Auth'], summary: 'Liveness probe', security: [], responses: { '200': { description: 'ok' } } },
     },

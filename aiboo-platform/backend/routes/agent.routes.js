@@ -7,6 +7,7 @@ import { safeEqual } from '../middleware/security.js';
 import { validate } from '../middleware/validate.js';
 import { agentFindingSchema } from '../schemas/index.js';
 import { audit } from '../utils/audit.js';
+import { emitCritical } from '../utils/alerts.js';
 import logger from '../utils/logger.js';
 import Finding from '../models/Finding.js';
 import Threat from '../models/Threat.js';
@@ -251,7 +252,7 @@ router.post('/correlated', protect, (req, res) => {
   }
 
   if (['critical', 'high'].includes(req.body.severity))
-    emit('alert:critical', { ...req.body, message: req.body.description });
+    emitCritical({ ...req.body, message: req.body.description });
   res.json({ ok: true });
 });
 

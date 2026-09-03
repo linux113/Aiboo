@@ -26,6 +26,7 @@ import aiRoutes from './routes/ai.routes.js';
 import dashboardRoutes from './routes/dashboard.routes.js';
 import agentRoutes, { seedDemoAgentData, hydrateStoreFromMongo } from './routes/agent.routes.js';
 import auditRoutes from './routes/audit.routes.js';
+import notificationRoutes from './routes/notification.routes.js';
 import { requestId } from './middleware/requestId.js';
 import { openapiSpec } from './docs/swagger.js';
 
@@ -116,6 +117,7 @@ app.use('/api/respond', apiLimiter, responseRoutes);
 app.use('/api/ai', apiLimiter, aiRoutes);
 app.use('/api/dashboard', apiLimiter, dashboardRoutes);
 app.use('/api/audit', apiLimiter, auditRoutes);
+app.use('/api/notifications', apiLimiter, notificationRoutes);
 
 // ✅ Agent routes now use agentLimiter (more permissive)
 app.use('/api/agent', agentLimiter, agentRoutes);

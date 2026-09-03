@@ -1,21 +1,23 @@
 // backend/utils/audit.js — fire-and-forget audit trail writer.
 // Never throws into the request path; failures are logged only.
+// `req` may be null for background events (notification dead-letters etc.).
 import AuditLog from '../models/AuditLog.js';
 import logger from './logger.js';
 
 export function audit(req, action, { targetType, targetId, details } = {}) {
+  const r = req || {};
   const entry = {
     actor: {
-      id: req.user?.id ?? null,
-      email: req.user?.email ?? 'anonymous',
-      role: req.user?.role ?? null,
+      id: r.user?.id ?? null,
+      email: r.user?.email ?? 'system',
+      role: r.user?.role ?? null,
     },
     action,
     targetType,
     targetId: targetId ? String(targetId) : undefined,
-    ip: req.ip,
-    userAgent: req.headers?.['user-agent'],
-    requestId: req.requestId,
+    ip: r.ip,
+    userAgent: r.headers?.['user-agent'],
+    requestId: r.requestId,
     details: details ?? {},
   };
 
