@@ -1,4 +1,5 @@
 import jwt from 'jsonwebtoken';
+import { matchesAnyKey } from './security.js';
 
 const tokenBlacklist = new Map();
 const BLACKLIST_TTL = 24 * 60 * 60 * 1000;
@@ -36,12 +37,8 @@ export const protect = (req, res, next) => {
 
   const apiKey = req.headers['x-api-key'];
   if (apiKey) {
-    const keysStr = process.env.API_KEYS || '';
-    const validKeys = keysStr ? keysStr.split(',').map(k => k.trim()) : [];
-    if (validKeys.length === 0) {
-      return res.status(401).json({ message: 'API key authentication not configured' });
-    }
-    if (validKeys.includes(apiKey)) {
+    // Timing-safe check against the API_KEYS allowlist (comma-separated env).
+    if (matchesAnyKey(apiKey, process.env.API_KEYS)) {
       req.user = { id: null, role: 'service', email: 'service@aiboo' };
       return next();
     }

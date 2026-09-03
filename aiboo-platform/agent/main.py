@@ -17,11 +17,11 @@ from core.orchestrator import Orchestrator
 from core.event_bus import EventBus
 from api.ingestion_api import create_app
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
-    datefmt="%H:%M:%S",
-)
+# UTF-8-safe logging FIRST — prevents cp1252 UnicodeEncodeError on Windows
+# consoles (the bug that previously disabled CommandDashboard/AutonomousResponse engines).
+from utils.logging_setup import configure_logging
+
+configure_logging(level="INFO")
 
 log = logging.getLogger("main")
 
@@ -46,10 +46,13 @@ def ensure_endpoint_config():
     if not config.has_section('AIBOO'):
         config['AIBOO'] = {}
 
-    # Set default values if missing
+    # Set default values if missing.
+    # NOTE: remote_url default is local backend. For remote/tunnel deployments set
+    # the REMOTE_URL / NODE_BACKEND env var or edit config.ini — never hardcode a
+    # tunnel URL here (ngrok free URLs rotate on every restart).
     defaults = {
-        'remote_url': 'https://your-ngrok-url.ngrok-free.dev',
-        'api_key': 'dev-key-change-in-production',
+        'remote_url': os.getenv('REMOTE_URL', os.getenv('NODE_BACKEND', 'http://localhost:4000')),
+        'api_key': os.getenv('AGENT_API_KEY', 'dev-key-change-in-production'),
         'server_ip': '192.168.1.100',
         'log_level': 'INFO',
     }

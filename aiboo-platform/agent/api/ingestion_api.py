@@ -482,11 +482,8 @@ def create_app(event_bus: EventBus = None) -> FastAPI:
 
 # ---- Standalone execution ----
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s \u2014 %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    from utils.logging_setup import configure_logging
+    configure_logging(level="INFO")
 
     bus = get_event_bus()
 

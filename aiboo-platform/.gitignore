@@ -4,9 +4,13 @@ __pycache__/
 .env
 *.env
 dist/
+dist.zip
 .pytest_cache/
 *.egg-info/
 *.pt
+*.db
+alerts_queue.db
+config.ini
 .DS_Store
 logs/
 *.log

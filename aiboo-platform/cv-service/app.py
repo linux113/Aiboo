@@ -48,6 +48,9 @@ class Config:
     PORT = int(os.environ.get("CV_PORT", 5050))
     NODE_BACKEND = os.environ.get("NODE_BACKEND", "http://localhost:4000")
     CV_AUTH_TOKEN = os.environ.get("CV_AUTH_TOKEN", "changeme-default-token-change-in-production")
+    # Shared secret with the Node backend for POST /api/cameras/detections.
+    # Must match backend env CV_INGEST_KEY. Empty in dev = unauthenticated ingest.
+    CV_INGEST_KEY = os.environ.get("CV_INGEST_KEY", "")
     YOLO_MODEL_PATH = os.environ.get("YOLO_MODEL_PATH", "yolov8n.pt")
     YOLO_CONFIDENCE = float(os.environ.get("YOLO_CONFIDENCE", "0.30"))
     FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "http://localhost:3000")
@@ -1268,6 +1271,8 @@ class CameraWorker:
         headers = {"Content-Type": "application/json"}
         if node_token:
             headers["Authorization"] = f"Bearer {node_token}"
+        if Config.CV_INGEST_KEY:
+            headers["X-API-Key"] = Config.CV_INGEST_KEY
 
         success = _post_with_retry(
             f"{Config.NODE_BACKEND}/api/cameras/detections",
@@ -1336,6 +1341,8 @@ def _retry_failed_detections():
             with _node_token_lock:
                 if _NODE_TOKEN:
                     headers["Authorization"] = f"Bearer {_NODE_TOKEN}"
+            if Config.CV_INGEST_KEY:
+                headers["X-API-Key"] = Config.CV_INGEST_KEY
             try:
                 resp = requests.post(
                     f"{Config.NODE_BACKEND}/api/cameras/detections",

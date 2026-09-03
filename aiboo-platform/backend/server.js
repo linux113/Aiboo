@@ -9,6 +9,7 @@ import { connectDB } from './config/db.js';
 import { initSocket } from './config/socket.js';
 import socketHandler from './sockets/index.js';
 import { errorHandler } from './middleware/error.js';
+import { assertProductionSecrets } from './middleware/security.js';
 // ✅ Import all limiters (auth, api, agent)
 import { authLimiter, apiLimiter, agentLimiter } from './middleware/rateLimiter.js';
 import logger from './utils/logger.js';
@@ -21,8 +22,10 @@ import identityRoutes from './routes/identity.routes.js';
 import responseRoutes from './routes/response.routes.js';
 import aiRoutes from './routes/ai.routes.js';
 import dashboardRoutes from './routes/dashboard.routes.js';
-import agentRoutes from './routes/agent.routes.js';
-import { seedDemoAgentData } from './routes/agent.routes.js';
+import agentRoutes, { seedDemoAgentData, hydrateStoreFromMongo } from './routes/agent.routes.js';
+
+// Fail fast on known-default secrets before anything binds a port.
+assertProductionSecrets();
 
 // ❌ Outbound WebSocket import removed – agents push via HTTP.
 
@@ -102,6 +105,9 @@ const startServer = async () => {
     if (process.env.NODE_ENV !== 'production' || process.env.SEED_DEMO_DATA === 'true') {
       seedDemoAgentData();
     }
+    // Rehydrate in-memory agent store from Mongo (restart-safe findings).
+    // Non-blocking: a slow Mongo must never delay the port opening / healthcheck.
+    hydrateStoreFromMongo();
     server.listen(PORT, () => {
       logger.info(`AiBoO Backend running on port ${PORT}`);
     });

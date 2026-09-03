@@ -1,12 +1,19 @@
 version: "3.9"
 
+# ─────────────────────────────────────────────────────────────────────
+# Secrets are interpolated from a root-level .env file (see .env.example).
+#   cp .env.example .env   then fill in real values (openssl rand -hex 32).
+# NEVER commit the real .env.
+# ─────────────────────────────────────────────────────────────────────
+
 services:
   mongodb:
     image: mongo:7
     container_name: aiboo-mongodb
     restart: unless-stopped
+    # Bind DB to loopback only — never expose Mongo on a public interface.
     ports:
-      - "27017"
+      - "127.0.0.1:27017:27017"
     volumes:
       - mongo_data:/data/db
     networks:
@@ -28,11 +35,21 @@ services:
     depends_on:
       mongodb:
         condition: service_healthy
-    env_file:
-      - ./backend/.env
     environment:
+      - NODE_ENV=${NODE_ENV:-production}
+      - PORT=4000
       - MONGO_URI=mongodb://mongodb:27017/aiboo
-      - NODE_ENV=production
+      - JWT_SECRET=${JWT_SECRET}
+      - AGENT_API_KEY=${AGENT_API_KEY}
+      - API_KEYS=${API_KEYS}
+      - CV_INGEST_KEY=${CV_INGEST_KEY}
+      - OPENAI_KEY=${OPENAI_KEY:-}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173}
+      - AGENT_SERVICE_URL=http://agent:8001
+      - CV_SERVICE_URL=http://cv-service:5050
+      - TRUST_PROXY=1
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - SEED_DEMO_DATA=${SEED_DEMO_DATA:-false}
     networks:
       - aiboo-net
     healthcheck:
@@ -45,6 +62,13 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      # Vite bakes these at BUILD time — same-origin relative URLs so the SPA
+      # works on any host/domain/tunnel without rebuilds.
+      args:
+        VITE_API_URL: /api
+        VITE_SOCKET_URL: ""
+        VITE_CV_URL: /cv-api
+        VITE_AGENT_URL: /agent-api
     container_name: aiboo-frontend
     restart: unless-stopped
     ports:
@@ -52,10 +76,11 @@ services:
     depends_on:
       - backend
     environment:
-      - VITE_API_URL=http://localhost:4000/api
-      - VITE_SOCKET_URL=http://localhost:4000
-      - VITE_CV_URL=http://localhost:5050
-      - VITE_AGENT_URL=http://localhost:8001
+      # Consumed by the nginx template (envsubst) at container start
+      - BACKEND_HOST=backend
+      - AGENT_HOST=agent
+      - CV_HOST=cv-service
+      - CV_AUTH_TOKEN=${CV_AUTH_TOKEN}
     networks:
       - aiboo-net
 
@@ -69,11 +94,32 @@ services:
       - "8001:8001"
     depends_on:
       - backend
-    env_file:
-      - ./agent/.env
     environment:
-      - NODE_BACKEND=http://backend:4000
       - API_PORT=8001
+      - API_HOST=0.0.0.0
+      - NODE_BACKEND=http://backend:4000
+      - REMOTE_URL=http://backend:4000
+      - ENDPOINT_NAME=${ENDPOINT_NAME:-aiboo-agent-docker}
+      - AGENT_API_KEY=${AGENT_API_KEY}
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY}
+      - AIBOO_ENV=${AIBOO_ENV:-production}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - DB_TYPE=memory
+      # true = full tri-gate orchestrator inside the container (recommended for
+      # prod on Linux; Windows Event Log ingestion auto-disables and events
+      # arrive via the API). false = lightweight ingestion API only.
+      - RUN_ORCHESTRATOR=${RUN_ORCHESTRATOR:-true}
+      # Action engines are opt-in — they kill processes / lock hosts.
+      - ENABLE_COMMAND_DASHBOARD=${ENABLE_COMMAND_DASHBOARD:-true}
+      - ENABLE_AUTONOMOUS_RESPONSE=${ENABLE_AUTONOMOUS_RESPONSE:-false}
+      - ENABLE_REAL_RESPONSE=${ENABLE_REAL_RESPONSE:-false}
+      # SQLite offline queue lives on the mounted volume
+      - ALERT_QUEUE_DB_PATH=/app/queue/alerts_queue.db
+    volumes:
+      # Persist the offline alert queue across container restarts
+      - agent_queue:/app/queue
+    # NOTE: ALERT_QUEUE_DB_PATH is set here so the SQLite queue lands on the volume
+    # (path is also read in core/alert_queue.py)
     networks:
       - aiboo-net
     healthcheck:
@@ -95,9 +141,10 @@ services:
     environment:
       - CV_HOST=0.0.0.0
       - NODE_BACKEND=http://backend:4000
-      # CHANGE THIS: set a strong random secret for production
-      - CV_AUTH_TOKEN=changeme-cv-token
-      - FRONTEND_ORIGIN=http://localhost:5173
+      - CV_AUTH_TOKEN=${CV_AUTH_TOKEN}
+      # Must match backend CV_INGEST_KEY — authenticates detection posts
+      - CV_INGEST_KEY=${CV_INGEST_KEY}
+      - FRONTEND_ORIGIN=${CORS_ORIGINS:-http://localhost:5173}
     volumes:
       - cv_models:/app/models
     networks:
@@ -111,6 +158,7 @@ services:
 volumes:
   mongo_data:
   cv_models:
+  agent_queue:
 
 networks:
   aiboo-net:

@@ -19,11 +19,10 @@ from core.events import ThreatEvent, ThreatType, Severity
 from api.ingestion_api import create_app
 from core.config import config
 
-logging.basicConfig(
-    level=getattr(logging, config.log_level.upper(), logging.INFO),
-    format="%(asctime)s [%(levelname)s] %(name)s \u2014 %(message)s",
-    datefmt="%H:%M:%S",
-)
+# UTF-8-safe logging FIRST (fixes cp1252 UnicodeEncodeError on Windows consoles)
+from utils.logging_setup import configure_logging
+
+configure_logging(level=config.log_level)
 
 logging.getLogger("WindowsIngestor").setLevel(logging.WARNING)
 logging.getLogger("Gate1.Perimeter").setLevel(logging.INFO)
@@ -33,6 +32,7 @@ log = logging.getLogger("runner")
 
 event_bus = EventBus()
 _shutdown_requested = False
+_orchestrator = None
 
 
 def handle_signal(signum, frame):
@@ -67,11 +67,29 @@ def run_api_server():
 async def run_agents():
     print_agent = SimplePrintAgent(event_bus)
     log.info("PrintAgent active")
+
+    # Optionally run the FULL orchestrator (tri-gate + engines + bridge) inside
+    # the container. Enabled with RUN_ORCHESTRATOR=true — this is what production
+    # deployments want; the bare API-only mode remains the default for dev/tests.
+    if os.getenv("RUN_ORCHESTRATOR", "false").lower() == "true":
+        from core.orchestrator import Orchestrator
+        log.info("RUN_ORCHESTRATOR=true — starting full tri-gate orchestrator")
+        orchestrator = Orchestrator(event_bus)
+        await orchestrator.start()
+        global _orchestrator
+        _orchestrator = orchestrator
+
     try:
         while not _shutdown_requested:
             await asyncio.sleep(1)
     except (KeyboardInterrupt, asyncio.CancelledError):
         log.warning("Shutdown requested")
+    finally:
+        if _orchestrator is not None:
+            try:
+                await _orchestrator.shutdown()
+            except Exception as exc:
+                log.warning("Orchestrator shutdown error: %s", exc)
 
 
 async def main():

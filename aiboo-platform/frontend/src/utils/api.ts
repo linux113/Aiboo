@@ -1,12 +1,17 @@
 import axios from "axios";
 import { logger } from "./logger";
 
-export const API = import.meta.env.VITE_API_URL || "http://localhost:4000/api";
-export const SOCKET_URL =
-  import.meta.env.VITE_SOCKET_URL || "http://localhost:4000";
-export const CV_URL = import.meta.env.VITE_CV_URL || "http://localhost:5050";
-export const AGENT_URL =
-  import.meta.env.VITE_AGENT_URL || "http://localhost:8001";
+// Service base URLs.
+// - Local dev (vite dev server): VITE_* unset → localhost defaults below.
+// - Production / docker: build args set VITE_API_URL=/api, VITE_CV_URL=/cv-api,
+//   VITE_AGENT_URL=/agent-api and nginx proxies each prefix to the right
+//   service (same-origin — no CORS, no hardcoded hosts, works behind any
+//   domain/tunnel/proxy).
+// `??` (not `||`) so an explicit empty VITE_SOCKET_URL means "same origin".
+export const API: string = import.meta.env.VITE_API_URL ?? "http://localhost:4000/api";
+export const SOCKET_URL: string = import.meta.env.VITE_SOCKET_URL ?? "http://localhost:4000";
+export const CV_URL: string = import.meta.env.VITE_CV_URL ?? "http://localhost:5050";
+export const AGENT_URL: string = import.meta.env.VITE_AGENT_URL ?? "http://localhost:8001";
 
 export function getToken(): string | null {
   return localStorage.getItem("token");
