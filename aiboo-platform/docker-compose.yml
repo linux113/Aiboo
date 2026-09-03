@@ -32,6 +32,10 @@ services:
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     profiles: ["redis"]
+    # Loopback-only host port so hybrid runs (backend on the host, infra in
+    # docker) can use REDIS_URL=redis://localhost:6379. Loopback — like mongo.
+    ports:
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     networks:

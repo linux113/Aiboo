@@ -50,6 +50,24 @@ Everything runs inside containers; VS Code is just a fancy terminal here.
 Use **Docker extension** (whale icon in the sidebar) to view logs/containers
 without typing commands.
 
+### Mode A+ — Real stack, one command, logs on disk (recommended first run)
+
+Real MongoDB + Redis in docker, real **host processes** for backend/agent/web,
+every log mirrored to files. Zero manual secret generation:
+
+1. **Terminal → Run Task… → `aiboo: real stack up (mongo+redis+backend+agent+web, logs→files)`**
+   (= `scripts/real-stack.sh up`; first run generates `backend/.env` with fresh
+   `openssl rand` secrets, installs deps, builds the same-origin UI)
+2. Browse **http://localhost:5173** → Register → first account = ADMIN
+3. Logs: task **`aiboo: real stack logs (tail)`** or open `logs/backend.log`
+   (JSON lines — set a pino log-viewer extension, or just read raw)
+4. Health: task `aiboo: real stack status` · Stop: task `aiboo: real stack down`
+
+Data persists in the `mongo_data` volume. To DEBUG the real stack, keep the
+infra from this mode and F5 the compound **🚀 Real hybrid stack** — it launches
+`Backend (dev)` (now with `LOG_FILE` + `REDIS_URL` preset), `Agent (API mode)`
+and `Web front door (node)` together.
+
 ---
 
 ## 2. Mode B — Hybrid debug mode (recommended for development)

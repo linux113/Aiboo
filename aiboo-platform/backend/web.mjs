@@ -1,6 +1,7 @@
-// sandbox/web.mjs — DEMO same-origin front door for the sandbox preview.
-// Serves frontend/dist + proxies /api,/socket.io -> backend:4000 and
-// /agent-api -> agent:8001. Mirrors the nginx template used in production.
+// web.mjs — same-origin front door for REAL and demo runs on a host:
+// serves frontend/dist and proxies /api + /socket.io -> backend:4000,
+// /agent-api -> agent API :8001. Mirrors the nginx template used in
+// production (same-origin — no CORS, works behind any tunnel).
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,13 +9,13 @@ import { createRequire } from 'node:module';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// resolve deps from backend/node_modules (the demo runs outside a package root)
-const require = createRequire(path.join(__dirname, '..', 'package.json'));
+// resolve deps from backend/node_modules
+const require = createRequire(path.join(__dirname, 'package.json'));
 const express = require('express');
 const httpProxy = require('http-proxy');
 
 // backend/demo -> aiboo-platform/frontend/dist
-const DIST = path.join(__dirname, '..', '..', 'frontend', 'dist');
+const DIST = path.join(__dirname, '..', 'frontend', 'dist');
 const BACKEND = process.env.BACKEND || 'http://127.0.0.1:4000';
 const AGENT = process.env.AGENT || 'http://127.0.0.1:8001';
 const PORT = Number(process.env.PORT || 5173);
@@ -46,4 +47,4 @@ server.on('upgrade', (req, socket, head) => {
   if (req.url.startsWith('/socket.io')) proxy.ws(req, socket, head, { target: BACKEND });
   else socket.destroy();
 });
-server.listen(PORT, '0.0.0.0', () => console.log(`demo web on :${PORT} -> backend ${BACKEND}, agent ${AGENT}`));
+server.listen(PORT, '0.0.0.0', () => console.log(`web front door on :${PORT} -> backend ${BACKEND}, agent ${AGENT}`));

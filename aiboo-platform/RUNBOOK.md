@@ -20,7 +20,7 @@ VITE_API_URL=/api VITE_SOCKET_URL= VITE_AGENT_URL=/agent-api VITE_CV_URL=/cv-api
 # 2. Install backend deps + start API (:4000) and web front door (:5173)
 cd ../backend && npm install
 node demo/boot.mjs &          # REST API + socket.io on :4000
-node demo/web.mjs &           # serves frontend/dist, proxies /api + /agent-api
+node web.mjs &                # serves frontend/dist, proxies /api + /agent-api
 
 # 3. Seed admin + demo data (idempotent — safe to re-run after any restart)
 node demo/seed-demo.mjs
@@ -37,7 +37,33 @@ You get 3 cameras, 2 CV detections (one critical weapon), agent finding,
 
 ---
 
-## A. Quick start — Docker (10 minutes)
+## A0. Real stack — one command (all real: MongoDB + Redis + processes)
+
+No demo shims: **real MongoDB 7 + Redis 7** (docker, loopback-only ports) and
+**real backend / agent / web processes** on the host, all logs written to files.
+
+```bash
+scripts/real-stack.sh up        # first run: generates backend/.env with real
+                                # random secrets, installs deps, builds UI
+scripts/real-stack.sh status    # health of every component
+scripts/real-stack.sh logs      # tail -f all service logs (Ctrl-C to exit)
+scripts/real-stack.sh down      # stop (data volumes KEPT)
+```
+
+| What | Where |
+|---|---|
+| Backend log (JSON lines) | `logs/backend.log` (via `LOG_FILE`) |
+| Agent API log | `logs/agent.log` |
+| Front door log | `logs/web.log` |
+| MongoDB / Redis | `docker logs aiboo-mongodb` / `aiboo-redis` |
+| Security audit trail | UI → Settings → Audit, or `GET /api/audit` (admin JWT) |
+
+First user you register in the UI becomes admin — data persists in the
+`mongo_data` docker volume across restarts. In VS Code: task
+**`aiboo: real stack up`** or the compound **🚀 Real hybrid stack** (F5, with
+breakpoints — see VSCODE_GUIDE.md).
+
+---
 
 ### 1. Prerequisites
 - Docker Desktop (or Engine + Compose v2) — `docker compose version` works
