@@ -8,6 +8,8 @@ import { validate } from '../middleware/validate.js';
 import { agentFindingSchema } from '../schemas/index.js';
 import { audit } from '../utils/audit.js';
 import { emitCritical } from '../utils/alerts.js';
+import { enrich } from '../services/intel.service.js';
+import { onCorrelatedAlert } from '../services/soar.service.js';
 import logger from '../utils/logger.js';
 import Finding from '../models/Finding.js';
 import Threat from '../models/Threat.js';
@@ -89,6 +91,23 @@ const persistFinding = (finding) => {
   }).catch((err) => logger.error(`Finding persist failed: ${err.message}`));
 };
 
+// ---- Threat-intel enrichment (fire-and-forget, never blocks ingest) ----
+const enrichFinding = async (finding) => {
+  try {
+    const { iocs, intel } = await enrich(finding);
+    if (!iocs.length) return;
+    finding.metadata = { ...(finding.metadata || {}), iocs, intel };
+    Finding.findOneAndUpdate(
+      { 'metadata.legacyId': finding.id },
+      { $set: { metadata: finding.metadata } }
+    ).catch(() => {});
+    emit('agent:intel', { id: finding.id, iocs, intel });
+    logger.debug(`Intel enriched finding ${finding.id}: ${iocs.length} IoC(s)`);
+  } catch (err) {
+    logger.warn(`Intel enrichment skipped: ${err.message}`);
+  }
+};
+
 export async function hydrateStoreFromMongo() {
   try {
     if (mongoose.connection.readyState !== 1) {
@@ -166,6 +185,7 @@ router.post('/findings', validateAgentApiKey, validate({ body: agentFindingSchem
     push(store.findings, finding);
     persistFinding(finding);
     emit('agent:finding', finding);
+    enrichFinding(finding); // async — updates metadata + emits agent:intel when done
     logger.info(`Agent finding from ${source}: ${threat_type} (${severity})`);
 
     res.status(201).json(finding);
@@ -253,6 +273,10 @@ router.post('/correlated', protect, (req, res) => {
 
   if (['critical', 'high'].includes(req.body.severity))
     emitCritical({ ...req.body, message: req.body.description });
+
+  // SOAR: create incidents for any matching playbooks (approval or auto)
+  onCorrelatedAlert(req.body);
+
   res.json({ ok: true });
 });
 

@@ -52,6 +52,9 @@ class Config:
     # Must match backend env CV_INGEST_KEY. Empty in dev = unauthenticated ingest.
     CV_INGEST_KEY = os.environ.get("CV_INGEST_KEY", "")
     YOLO_MODEL_PATH = os.environ.get("YOLO_MODEL_PATH", "yolov8n.pt")
+    # cuda device for inference: "0", "cpu", or "" for ultralytics auto-select.
+    # For TensorRT/ONNX exports set YOLO_MODEL_PATH to the .onnx/.engine file.
+    YOLO_DEVICE = os.environ.get("YOLO_DEVICE", "")
     YOLO_CONFIDENCE = float(os.environ.get("YOLO_CONFIDENCE", "0.30"))
     FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "http://localhost:3000")
     DETECTION_COOLDOWN_WEAPON = int(os.environ.get("DETECTION_COOLDOWN_WEAPON", "3"))
@@ -950,7 +953,12 @@ class CameraWorker:
 
         if YOLO_AVAILABLE:
             try:
-                results = yolo(frame, verbose=False, conf=Config.YOLO_CONFIDENCE)[0]
+                results = yolo(
+                    frame,
+                    verbose=False,
+                    conf=Config.YOLO_CONFIDENCE,
+                    **({"device": Config.YOLO_DEVICE} if Config.YOLO_DEVICE else {}),
+                )[0]
             except Exception as exc:
                 log.error("YOLO inference failed: %s", exc)
                 return annotated, []

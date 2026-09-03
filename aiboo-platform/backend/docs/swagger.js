@@ -258,6 +258,55 @@ export const openapiSpec = {
       get: { tags: ['Respond'], summary: 'Recent dispatch results (sent/failed)', security: bearer, responses: { '200': { description: 'Dispatch history' } } },
     },
 
+    '/api/intel/status': {
+      get: { tags: ['Threats'], summary: 'Configured threat-intel sources', security: bearer, responses: { '200': { description: 'Enabled sources + cache size' } } },
+    },
+    '/api/intel/lookup': {
+      get: {
+        tags: ['Threats'], summary: 'Look up an IP or file hash (AbuseIPDB/VirusTotal/MISP)',
+        security: bearer,
+        parameters: [
+          { name: 'ip', schema: { type: 'string' }, in: 'query', description: 'public IPv4' },
+          { name: 'hash', schema: { type: 'string' }, in: 'query', description: 'md5/sha1/sha256' },
+        ],
+        responses: { '200': { description: 'Aggregated verdict per source' }, '400': { description: 'Validation' } },
+      },
+    },
+
+    '/api/soar/incidents': {
+      get: { tags: ['Respond'], summary: 'SOAR incidents (filter by status)', security: bearer, parameters: [{ name: 'status', schema: { type: 'string', enum: ['pending', 'approved', 'rejected', 'executed', 'failed'] }, in: 'query' }], responses: { '200': { description: 'Incidents' } } },
+    },
+    '/api/soar/incidents/{id}/approve': {
+      post: { tags: ['Respond'], summary: 'Approve & execute a pending incident (admin, audited)', security: bearer, parameters: [{ name: 'id', required: true, schema: { type: 'string' }, in: 'path' }], responses: { '200': { description: 'Executed incident' }, '409': { description: 'Already decided' } } },
+    },
+    '/api/soar/incidents/{id}/reject': {
+      post: { tags: ['Respond'], summary: 'Reject a pending incident (admin, audited)', security: bearer, parameters: [{ name: 'id', required: true, schema: { type: 'string' }, in: 'path' }], responses: { '200': { description: 'Rejected incident' } } },
+    },
+    '/api/soar/playbooks': {
+      get: { tags: ['Respond'], summary: 'List SOAR playbooks', security: bearer, responses: { '200': { description: 'Playbooks' } } },
+      post: {
+        tags: ['Respond'], summary: 'Create a playbook (admin)',
+        security: bearer,
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object', required: ['name', 'match', 'actions'],
+                properties: {
+                  name: { type: 'string' },
+                  match: { type: 'object', required: ['severity'], properties: { severity: { type: 'string', enum: ['low', 'medium', 'high', 'critical'] }, typeContains: { type: 'string' }, source: { type: 'string' } } },
+                  actions: { type: 'array', items: { type: 'object', required: ['type'], properties: { type: { type: 'string' }, target: { type: 'string' } } } },
+                  mode: { type: 'string', enum: ['approval', 'auto'], default: 'approval' },
+                },
+              },
+            },
+          },
+        },
+        responses: { '201': { description: 'Created' } },
+      },
+    },
+
     '/health': {
       get: { tags: ['Auth'], summary: 'Liveness probe', security: [], responses: { '200': { description: 'ok' } } },
     },

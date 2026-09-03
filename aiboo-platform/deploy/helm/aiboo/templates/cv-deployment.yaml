@@ -51,6 +51,14 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.auth.secretName }}
                   key: cvIngestKey
+            {{- if .Values.cv.modelPath }}
+            - name: YOLO_MODEL_PATH
+              value: {{ .Values.cv.modelPath }}
+            {{- end }}
+            {{- if .Values.cv.device }}
+            - name: YOLO_DEVICE
+              value: {{ .Values.cv.device }}
+            {{- end }}
           readinessProbe:
             httpGet:
               path: /health

@@ -27,6 +27,8 @@ import dashboardRoutes from './routes/dashboard.routes.js';
 import agentRoutes, { seedDemoAgentData, hydrateStoreFromMongo } from './routes/agent.routes.js';
 import auditRoutes from './routes/audit.routes.js';
 import notificationRoutes from './routes/notification.routes.js';
+import intelRoutes from './routes/intel.routes.js';
+import soarRoutes from './routes/soar.routes.js';
 import { requestId } from './middleware/requestId.js';
 import { openapiSpec } from './docs/swagger.js';
 
@@ -118,6 +120,8 @@ app.use('/api/ai', apiLimiter, aiRoutes);
 app.use('/api/dashboard', apiLimiter, dashboardRoutes);
 app.use('/api/audit', apiLimiter, auditRoutes);
 app.use('/api/notifications', apiLimiter, notificationRoutes);
+app.use('/api/intel', apiLimiter, intelRoutes);
+app.use('/api/soar', apiLimiter, soarRoutes);
 
 // ✅ Agent routes now use agentLimiter (more permissive)
 app.use('/api/agent', agentLimiter, agentRoutes);
@@ -146,6 +150,9 @@ const startServer = async () => {
     // Rehydrate in-memory agent store from Mongo (restart-safe findings).
     // Non-blocking: a slow Mongo must never delay the port opening / healthcheck.
     hydrateStoreFromMongo();
+    // SOAR default playbooks (approval-mode only; idempotent).
+    const { seedDefaultPlaybooks } = await import('./services/soar.service.js');
+    seedDefaultPlaybooks();
     server.listen(PORT, () => {
       logger.info(`AiBoO Backend running on port ${PORT}`);
     });

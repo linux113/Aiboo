@@ -166,6 +166,9 @@ services:
       - CV_AUTH_TOKEN=${CV_AUTH_TOKEN}
       # Must match backend CV_INGEST_KEY — authenticates detection posts
       - CV_INGEST_KEY=${CV_INGEST_KEY}
+      # Accelerated inference (optional): exported model + cuda device
+      # - YOLO_MODEL_PATH=/app/models/yolov8n.engine
+      # - YOLO_DEVICE=0
       - FRONTEND_ORIGIN=${CORS_ORIGINS:-http://localhost:5173}
     volumes:
       - cv_models:/app/models

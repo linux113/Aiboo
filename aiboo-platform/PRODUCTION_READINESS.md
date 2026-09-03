@@ -1,7 +1,7 @@
 # AiBoO — Production Readiness Report
 
 > Audit date: 2026-09-03 · Scope: `aiboo-platform/` (backend, frontend, agent, cv-service, deployment)
-> Status after this pass: **Phases 1–2 COMPLETE · Phase 3 K8s/Helm COMPLETE · Phase 4 notification fabric + CEF SIEM forwarding COMPLETE** (SOAR playbooks, threat-intel feeds, compliance packs pending)
+> Status after this pass: **Phases 1–2 COMPLETE · Phase 3 K8s/Helm COMPLETE · Phase 4 notification fabric + CEF SIEM + threat-intel enrichment + SOAR playbooks COMPLETE** (Splunk HEC auth, GPU image build, compliance packs pending)
 
 ---
 
@@ -270,11 +270,24 @@ K8s/GPU scale-out, SIEM/SOAR + compliance integration.
   dedupe (60s), exponential-backoff retries (5 attempts), dead-letter
   `notification.failed` audit entries, admin API
   (`GET /channels`, `POST /test`, `GET /history`), all env-driven.
+- **Threat-intel enrichment** — ✅ done: findings auto-enriched with
+  AbuseIPDB / VirusTotal / MISP verdicts (IoC extraction: public IPv4,
+  md5/sha1/sha256; TTL cache 6h; negative-TTL on dead feeds; env-overridable
+  source URLs for proxies/self-hosted MISP). Manual `GET /api/intel/lookup`,
+  `GET /api/intel/status`; enriched metadata pushed via `agent:intel` socket.
+- **SOAR playbooks** — ✅ done: `Playbook` (match severity/type/source →
+  actions) + `Incident` models, `approval` mode (default; pages on-call via
+  the notification fabric, admin approves/rejects, execution goes through the
+  audited response-action path) and `auto` mode (immediate). Two safe default
+  playbooks seeded (ransomware-prelude containment, weapon lockdown).
+  API: `GET /soar/incidents`, `POST /soar/incidents/:id/approve|reject`,
+  playbook CRUD (zod-validated, audited).
 - **SIEM integration**: first pass ✅ (CEF events via HTTP collector);
   Splunk HEC auth headers + LEEF pending.
-- **SOAR playbooks**: webhook/queue-driven response actions with approval gates — ⬜ pending.
-- **Threat intel feeds**: MISP, AbuseIPDB, VirusTotal enrichment in
-  `threat_intelligence_engine` (currently static heuristics) — ⬜ pending.
+- **CV GPU/TensorRT path** — ◐ config done: `YOLO_DEVICE` selection,
+  `tools/export_model.py` (onnx/engine export), `requirements-gpu.txt`,
+  helm `cv.modelPath`/`cv.device` + compose passthrough. A GPU image build
+  (nvcr.io/nvidia base) + real-hardware validation still pending.
 - **Compliance engine**: real NIST 800-53 / CIS benchmark rule packs, PDF audit
   reports, data-retention policies, Mongo encryption-at-rest (CSFLE), S3 +
   lifecycle rules for snapshots — ◐ retention done (90-day TTL) · rest pending.

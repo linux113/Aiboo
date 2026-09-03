@@ -73,6 +73,33 @@ ResponseAction.find = () => chainable([]);
 const { default: Finding } = await import('./models/Finding.js');
 Finding.find = () => chainable([]);
 Finding.create = async (f) => { captures.findings.push(f); return { ...f }; };
+Finding.findOneAndUpdate = async () => null;
+
+const seededPlaybooks = [
+  { _id: 'pb_ransom', name: 'ransomware-prelude-containment', enabled: true, priority: 10,
+    match: { severity: 'critical', typeContains: 'ransomware', source: '' },
+    actions: [{ type: 'isolate' }, { type: 'lock_perimeter' }], mode: 'approval' },
+  { _id: 'pb_weapon', name: 'weapon-detected-lockdown', enabled: true, priority: 20,
+    match: { severity: 'critical', typeContains: 'weapon', source: '' },
+    actions: [{ type: 'lock_perimeter' }, { type: 'war_room' }], mode: 'approval' },
+];
+const { default: Playbook } = await import('./models/Playbook.js');
+Playbook.find = () => chainable(seededPlaybooks);
+Playbook.findOne = async () => null;
+Playbook.create = async (d) => { const pb = { _id: `pb_${Date.now()}`, ...d }; seededPlaybooks.push(pb); return pb; };
+Playbook.findByIdAndUpdate = async (id, u) => ({ _id: id, ...u });
+Playbook.findByIdAndDelete = async (id) => ({ _id: id });
+
+captures.incidents = [];
+const { default: Incident } = await import('./models/Incident.js');
+Incident.create = async (d) => {
+  const inc = { _id: `inc_${captures.incidents.length + 1}`, ...d,
+    save: async () => { const i = captures.incidents.findIndex((x) => x._id === inc._id); if (i >= 0) captures.incidents[i] = inc; return inc; } };
+  captures.incidents.push(inc); return inc;
+};
+Incident.find = () => chainable(captures.incidents);
+Incident.countDocuments = async () => captures.incidents.length;
+Incident.findById = async (id) => captures.incidents.find((x) => x._id === id) ?? null;
 
 // ─── Boot the server ──────────────────────────────────────────────
 process.env.MONGO_URI = 'mongodb://stub:27017/aiboo';
@@ -92,6 +119,9 @@ process.env.NOTIFICATION_TICK_MS = '40';
 process.env.NOTIFICATION_RETRY_DELAY_MS = '20';
 process.env.NOTIFICATION_MAX_ATTEMPTS = '3';
 process.env.ALERT_NOTIFY_SEVERITIES = 'critical';
+// Intel source pointed at the local receiver (URLs are env-overridable)
+process.env.ABUSEIPDB_API_KEY = 'test-abuse-key';
+process.env.ABUSEIPDB_URL = 'http://localhost:4990/intel';
 
 await import('./server.js');
 
@@ -109,7 +139,11 @@ const receiver = http.createServer((req, res) => {
     let body = null; try { body = JSON.parse(raw); } catch { /* non-json */ }
     received.push({ path: req.url, headers: req.headers, raw, body });
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end('{"ok":true}');
+    if (req.url.startsWith('/intel/check')) {
+      res.end(JSON.stringify({ data: { abuseConfidenceScore: 85, isp: 'EvilISP', usageType: 'Data Center', countryCode: 'RU' } }));
+    } else {
+      res.end('{"ok":true}');
+    }
   });
 });
 await new Promise((r) => receiver.listen(4990, r));
@@ -279,6 +313,85 @@ r = await get('/api/notifications/history', { bearer: ACCESS });
 const hist = await r.json();
 check('history records dead SIEM channel as failed', hist.items?.some((i) => i.channel === 'siem' && i.status === 'failed'));
 check('dead-letter audit written for failed channel', captures.audits.some((a) => a.action === 'notification.failed' && a.details?.channel === 'siem'));
+
+// ═══ 6c. Threat-intel enrichment ═════════════════════════════════
+r = await get('/api/intel/status', { bearer: ACCESS });
+check('GET /api/intel/status shows abuseipdb configured', (await r.json()).sources?.abuseipdb === true);
+
+r = await post('/api/agent/findings', {
+  agent_name: 'IntelAgent', threat_type: 'c2_beacon', severity: 'high',
+  summary: 'Host beaconing to known C2 203.0.113.66 every 30s',
+}, { key: 'test-agent-key-abcdef123456', bearer: ACCESS, cookie: false });
+check('finding with IoC accepted (201)', r.status === 201);
+await sleep(900);
+r = await get('/api/agent/findings?limit=5');
+const enriched = (await r.json()).find((f) => f.agent_name === 'IntelAgent');
+check('finding auto-enriched with IoC + intel', !!enriched?.metadata?.iocs?.some?.((i) => i.value === '203.0.113.66'),
+  JSON.stringify(enriched?.metadata?.iocs ?? []));
+check('intel verdict = malicious (score 85)', enriched?.metadata?.intel?.['ip:203.0.113.66']?.overall === 'malicious');
+
+r = await get('/api/intel/lookup?ip=203.0.113.66', { bearer: ACCESS });
+const lu = await r.json();
+check('manual lookup served from cache', r.status === 200 && lu.cached === true && lu.overall === 'malicious');
+r = await get('/api/intel/lookup?ip=not-an-ip', { bearer: ACCESS });
+check('lookup invalid ip -> 400 validation', r.status === 400);
+r = await get('/api/intel/lookup?ip=8.8.4.4');
+check('lookup requires auth (401)', r.status === 401);
+
+// ═══ 6d. SOAR playbooks ══════════════════════════════════════════
+captures.incidents.length = 0;
+r = await post('/api/agent/correlated', {
+  event_type: 'ransomware_prelude', severity: 'critical',
+  description: 'mass file renames + shadow copy deletion', entity: 'HOST-42',
+}, { bearer: ACCESS });
+check('correlated event accepted', r.status === 200);
+await sleep(400);
+check('SOAR incident created (pending, approval mode)', captures.incidents.length === 1 && captures.incidents[0].status === 'pending');
+const incId = captures.incidents[0]?._id;
+check('webhook notified of pending approval', received.some((x) => x.body?.event?.type === 'soar.pending_approval'));
+
+const actionsBefore = captures.responseActions.length;
+r = await post(`/api/soar/incidents/${incId}/approve`, {}, { bearer: ACCESS });
+check('POST /soar/incidents/:id/approve 200', r.status === 200, `status=${r.status}`);
+await sleep(200);
+check('approval executed playbook actions (isolate + lock_perimeter)', captures.responseActions.length >= actionsBefore + 2,
+  `+${captures.responseActions.length - actionsBefore}`);
+check('incident status = executed', captures.incidents[0].status === 'executed');
+r = await post(`/api/soar/incidents/${incId}/approve`, {}, { bearer: ACCESS });
+check('re-approve rejected (409)', r.status === 409, `status=${r.status}`);
+
+// reject path
+r = await post('/api/agent/correlated', {
+  event_type: 'weapon_brandished', severity: 'critical',
+  description: 'knife detected at entrance camera', entity: 'CAM-07',
+}, { bearer: ACCESS });
+await sleep(300);
+const weaponInc = captures.incidents.find((i) => i.playbookName === 'weapon-detected-lockdown' && i.status === 'pending');
+check('weapon incident pending', !!weaponInc);
+r = await post(`/api/soar/incidents/${weaponInc._id}/reject`, {}, { bearer: ACCESS });
+check('reject 200 + status rejected', r.status === 200 && weaponInc.status === 'rejected');
+
+// auto-mode playbook
+r = await post('/api/soar/playbooks', {
+  name: 'auto-bruteforce-block', match: { severity: 'high', typeContains: 'bruteforce' },
+  actions: [{ type: 'block' }], mode: 'auto',
+}, { bearer: ACCESS });
+check('create auto-mode playbook (201)', r.status === 201, `status=${r.status}`);
+const before2 = captures.responseActions.length;
+r = await post('/api/agent/correlated', {
+  event_type: 'bruteforce_surge', severity: 'high',
+  description: '500 SSH failures/min from 198.51.100.9', entity: 'GW-01',
+}, { bearer: ACCESS });
+await sleep(400);
+const autoInc = captures.incidents.find((i) => i.playbookName === 'auto-bruteforce-block');
+check('auto playbook executed without approval', !!autoInc && autoInc.status === 'executed' && captures.responseActions.length > before2);
+
+r = await get('/api/soar/incidents?status=executed', { bearer: ACCESS });
+check('GET /soar/incidents?status=executed', r.status === 200);
+r = await get('/api/soar/playbooks', { bearer: ACCESS });
+check('GET /soar/playbooks lists defaults + custom', (await r.json()).length >= 3);
+r = await get('/api/soar/incidents');
+check('SOAR incidents require auth (401)', r.status === 401);
 
 // ═══ 7. Logout revocation ════════════════════════════════════════
 const refreshBeforeLogout = jar.aiboo_refresh;

@@ -78,6 +78,10 @@ cv:
   replicas: 1
   gpu:
     enabled: false       # requires nvidia device plugin on the cluster
+  # Accelerated inference: point at an exported .onnx/.engine artifact
+  # (see cv-service/tools/export_model.py) and select the cuda device.
+  modelPath: ""           # e.g. /app/models/yolov8n.engine
+  device: ""              # e.g. "0"
   resources:
     requests: { cpu: 500m, memory: 1Gi }
     limits: { cpu: "2", memory: 4Gi }
