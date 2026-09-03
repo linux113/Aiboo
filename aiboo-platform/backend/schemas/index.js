@@ -8,7 +8,8 @@ export const registerSchema = z.object({
   name: z.string().trim().min(2).max(80),
   email: z.string().trim().toLowerCase().email(),
   password: z.string().min(8, 'password must be at least 8 characters').max(128),
-  role: z.enum(['admin', 'analyst', 'viewer']).optional(),
+  // NOTE: role is deliberately NOT accepted from public input (self-escalation).
+  // First registered user becomes admin; everyone else is an analyst.
 });
 
 export const loginSchema = z.object({

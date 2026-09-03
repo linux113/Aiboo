@@ -9,6 +9,12 @@ import User from './models/User.js';
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/aiboo';
 
 async function seed() {
+  // Guard: seed DROPS THE DATABASE. Refuse in production unless SEED_FORCE=true.
+  if (process.env.NODE_ENV === 'production' && process.env.SEED_FORCE !== 'true') {
+    console.error('REFUSING to seed: NODE_ENV=production and this script drops the database.');
+    console.error('Set SEED_FORCE=true to override (destroys all data!).');
+    process.exit(1);
+  }
   await mongoose.connect(MONGO_URI);
   console.log('✅ MongoDB Connected');
   console.log('🧹 Dropping database...');

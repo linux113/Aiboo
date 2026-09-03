@@ -33,8 +33,10 @@ const fakeUser = {
 };
 
 const { default: User } = await import('./models/User.js');
+let userCount = 1; // the stubbed login user exists
 User.findOne = async (f) => (f?.email === TEST_EMAIL ? fakeUser : null);
-User.create = async (d) => ({ ...fakeUser, ...d, _id: 'u_new_1' });
+User.countDocuments = async () => userCount;
+User.create = async (d) => { userCount += 1; return { ...fakeUser, ...d, _id: `u_new_${userCount}` }; };
 User.findById = (id) => chainable(id === 'u_smoke_1' ? fakeUser : { ...fakeUser, _id: id });
 User.findByIdAndUpdate = async () => null;
 
@@ -110,6 +112,9 @@ process.env.CV_INGEST_KEY = 'test-cv-ingest-key-abcdef';
 process.env.API_KEYS = 'test-service-key-1';
 process.env.PORT = '4999';
 process.env.SEED_DEMO_DATA = 'false';
+// The suite makes >20 auth calls — exactly what authLimiter (20/15m) blocks.
+// (The 429 observed without this flag is the limiter doing its job.)
+process.env.RATE_LIMIT_DISABLED = 'true';
 process.env.JWT_ACCESS_TTL = '1h';
 // Notification fabric: real receiver on 4990, deliberately-dead SIEM on 4991
 process.env.ALERT_WEBHOOK_URL = 'http://localhost:4990/hook';
@@ -221,6 +226,14 @@ r = await fetch(`${BASE}/api/auth/refresh`, {
   headers: { 'content-type': 'application/json', cookie: `aiboo_refresh=${ACCESS2 ?? ACCESS}` },
   body: '{}',
 });
+
+// ═══ 1b. Register bootstrap: no self-escalation ══════════════════
+r = await post('/api/auth/register', { name: 'Second User', email: 'analyst@smoke.test', password: 'Password123!', role: 'admin' }, { cookie: false });
+check('register 201 for new user', r.status === 201, `status=${r.status}`);
+const reg1 = await r.json();
+check('role field IGNORED — no self-escalation to admin', reg1.user?.role === 'analyst', `role=${reg1.user?.role}`);
+r = await post('/api/auth/register', { name: 'Bad', email: 'x@smoke.test', password: 'short', role: 'admin' }, { cookie: false });
+check('weak password rejected (400)', r.status === 400);
 
 // ═══ 2. Validation (zod) ══════════════════════════════════════════
 r = await post('/api/auth/login', { email: 'not-an-email', password: 'x' }, { cookie: false });
