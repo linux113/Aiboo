@@ -1,7 +1,39 @@
 # AiBoO RUNBOOK — how to run the platform
 
-Everything below is copy-paste ready. Three ways to run: **Docker (recommended)**,
-**local dev (no Docker)**, or **Kubernetes** (see `deploy/DEPLOY_K8S.md`).
+Everything below is copy-paste ready. Four ways to run: **Docker (recommended)**,
+**demo mode (fastest — any system, zero infra)**, **local dev (no Docker)**, or
+**Kubernetes** (see `deploy/DEPLOY_K8S.md`).
+
+---
+
+## 0. Demo mode — any system, zero infra (2 minutes)
+
+Runs the whole platform (API + UI + agent API) with Node only — no Mongo, Redis,
+or Docker. Data is **in-memory** (restart wipes it; re-run the seeder). Perfect
+for a laptop demo or a quick look at the UI.
+
+```bash
+# 1. Build the UI once (same-origin bundle)
+cd aiboo-platform/frontend && npm install
+VITE_API_URL=/api VITE_SOCKET_URL= VITE_AGENT_URL=/agent-api VITE_CV_URL=/cv-api npm run build
+
+# 2. Install backend deps + start API (:4000) and web front door (:5173)
+cd ../backend && npm install
+node demo/boot.mjs &          # REST API + socket.io on :4000
+node demo/web.mjs &           # serves frontend/dist, proxies /api + /agent-api
+
+# 3. Seed admin + demo data (idempotent — safe to re-run after any restart)
+node demo/seed-demo.mjs
+```
+
+Open **http://localhost:5173** → login `admin@demo.io` / `Password123!`.
+You get 3 cameras, 2 CV detections (one critical weapon), agent finding,
+2 assets, and a **pending SOAR incident** to approve.
+
+> Windows PowerShell for step 1: `$env:VITE_API_URL='/api'; $env:VITE_SOCKET_URL=''; $env:VITE_AGENT_URL='/agent-api'; $env:VITE_CV_URL='/cv-api'; npm run build`
+>
+> Optional: also run the Python agent API (`cd ../agent && python3 run_api.py`,
+> port 8001) — `web.mjs` proxies `/agent-api` to it automatically.
 
 ---
 

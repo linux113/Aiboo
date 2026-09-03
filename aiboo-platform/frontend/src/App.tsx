@@ -283,7 +283,7 @@ export default function App() {
 
   const handleLogout = () => {
     // Best-effort server-side revoke (access + refresh cookie) before clearing.
-    api.post("/auth/logout", {}).catch(() => { /* token may already be gone */ });
+    api.post(`${API}/auth/logout`, {}).catch(() => { /* token may already be gone */ });
     clearToken();
     socketRef.current?.disconnect();
     setTokenState(null);

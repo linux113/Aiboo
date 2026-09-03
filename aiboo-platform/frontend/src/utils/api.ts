@@ -38,7 +38,11 @@ export function clearToken() {
 }
 
 const api = axios.create({
-  baseURL: API,
+  // NO baseURL: every call site already passes its full path (`${API}/…`,
+  // `${AGENT_URL}/…`). Setting baseURL=API here made axios prepend it to
+  // already-prefixed URLs → /api/api/cameras → 404 → empty UI in the
+  // same-origin build (worked in dev only because API was an absolute URL
+  // there, which makes axios ignore baseURL).
   timeout: 15000,
   // Refresh token lives in an httpOnly cookie — send cookies on every call.
   withCredentials: true,

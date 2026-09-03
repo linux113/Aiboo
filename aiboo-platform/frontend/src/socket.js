@@ -1,7 +1,7 @@
 // frontend/src/socket.js
 import io from 'socket.io-client';
 
-const SOCKET_URL = 'http://localhost:4000'; // Your backend port
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL ?? 'http://localhost:4000'; // '' = same origin
 
 let socket;
 

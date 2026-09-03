@@ -30,7 +30,12 @@ const app = express();
 // '/api/auth/login' and the backend would 404. Match on the raw url instead.
 app.use((req, res, next) => {
   if (req.url === '/api' || req.url.startsWith('/api/')) return proxy.web(req, res, { target: BACKEND });
-  if (req.url.startsWith('/agent-api')) return agentProxy.web(req, res, { target: AGENT, prependPath: false });
+  if (req.url.startsWith('/agent-api')) {
+    // agent API serves at root (/health, /events...) — strip the /agent-api
+    // prefix the frontend uses to disambiguate from the backend's /api.
+    req.url = req.url.replace(/^\/agent-api/, '') || '/';
+    return agentProxy.web(req, res, { target: AGENT, prependPath: false });
+  }
   next();
 });
 app.use(express.static(DIST));
