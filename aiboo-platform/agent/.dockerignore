@@ -5,3 +5,7 @@ __pycache__
 tests/
 *.md
 check_logs.py
+config.ini
+*.db
+alerts_queue.db
+queue/

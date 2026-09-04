@@ -163,6 +163,13 @@ export default function App() {
     });
     socketRef.current = socket;
 
+    // Access tokens are short-lived now — on every reconnect, pick up the
+    // freshest token (the axios interceptor silently rotates it in localStorage).
+    socket.on("reconnect_attempt", () => {
+      const fresh = getToken();
+      if (fresh) socket.auth = { token: fresh };
+    });
+
     socket.on("connect", () => {
       setConnected(true);
       console.log("✅ Socket connected to backend");
@@ -275,6 +282,8 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    // Best-effort server-side revoke (access + refresh cookie) before clearing.
+    api.post(`${API}/auth/logout`, {}).catch(() => { /* token may already be gone */ });
     clearToken();
     socketRef.current?.disconnect();
     setTokenState(null);

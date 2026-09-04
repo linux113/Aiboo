@@ -29,7 +29,15 @@ export default function (io) {
           listDetections({}, 30),
           listCameras(),
         ]);
-        socket.emit('init:data', { threats, detections, cameras });
+        // list* services return { data, total, ... } — the client contract for
+        // init:data is plain arrays (it checks `payload?.length`). Normalize so
+        // the dashboard actually populates on connect.
+        const arr = (v) => (Array.isArray(v) ? v : Array.isArray(v?.data) ? v.data : []);
+        socket.emit('init:data', {
+          threats: arr(threats),
+          detections: arr(detections),
+          cameras: arr(cameras),
+        });
       } catch (e) {
         logger.error(`socket init error: ${e.message}`);
       }

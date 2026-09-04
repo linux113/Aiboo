@@ -8,10 +8,13 @@ const signToken = (user) =>
     { expiresIn: '7d' }
   );
 
-export const register = async ({ name, email, password, role }) => {
+export const register = async ({ name, email, password }) => {
   const existing = await User.findOne({ email });
   if (existing) throw { statusCode: 400, message: 'Registration failed' };
-  const user = await User.create({ name, email, password, role: role || 'analyst' });
+  // Bootstrap pattern: the FIRST user becomes admin; everyone else is an
+  // analyst. Role is never taken from the request (no self-escalation).
+  const isFirstUser = (await User.countDocuments({})) === 0;
+  const user = await User.create({ name, email, password, role: isFirstUser ? 'admin' : 'analyst' });
   const token = signToken(user);
   return { token, user: { id: user._id, name: user.name, email: user.email, role: user.role } };
 };

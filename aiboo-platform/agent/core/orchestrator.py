@@ -16,6 +16,10 @@ from core.process_killer import ProcessKiller  # <-- NEW IMPORT
 
 log = logging.getLogger("Orchestrator")
 
+# Pull runtime config eagerly so env vars (NODE_BACKEND / REMOTE_URL) always win
+# over config.ini. NEVER hardcode a tunnel URL here — tunnels rotate per session.
+from core.config import config as _runtime_config  # noqa: E402
+
 
 class Orchestrator:
     def __init__(self, bus: EventBus) -> None:
@@ -55,14 +59,23 @@ class Orchestrator:
             MalwareAnalysisAgent(bus),
         ]
 
-        # ---- Core engines (DISABLED: Unicode logging causes cp1252 errors) ----
+        # ---- Core engines ----
+        # Previously DISABLED due to Unicode cp1252 logging crashes.
+        # logging_setup.configure_logging() now forces UTF-8 with errors='replace',
+        # so these run again. Engines that take REAL host actions are opt-in via env.
         self.correlation = CorrelationEngine(bus)
-        # self.dashboard = CommandDashboard(bus)          # DISABLED
-        # self.response_eng = AutonomousResponseEngine(bus) # DISABLED
+        self.dashboard = CommandDashboard(bus) if _runtime_config.enable_command_dashboard else None
+        self.response_eng = AutonomousResponseEngine(bus) if _runtime_config.enable_autonomous_response else None
 
         # ---- Real Windows Event Log ingestion ----
-        self.windows_ingestor = WindowsEventIngestor(bus)
-        # self.real_response = RealResponseEngine(bus)    # DISABLED
+        # Degrade gracefully on non-Windows hosts (Linux containers) instead of
+        # crashing the whole orchestrator — events can still arrive via the API.
+        try:
+            self.windows_ingestor = WindowsEventIngestor(bus)
+        except (RuntimeError, ImportError, OSError) as _ing_exc:
+            log.warning("Windows Event Log ingestion unavailable on this host: %s", _ing_exc)
+            self.windows_ingestor = None
+        self.real_response = RealResponseEngine(bus) if _runtime_config.enable_real_response else None
 
         # ---- Zero Trust engines (existing) ----
         self.behavioral_dna = BehavioralDNAEngine(bus)
@@ -87,7 +100,7 @@ class Orchestrator:
         self.anomaly_detection = AnomalyDetectionEngine(bus)
 
         # ---- MERN dashboard bridge ----
-        self.dashboard_bridge = DashboardBridge(bus, backend_url='https://stuffy-volley-had.ngrok-free.dev')
+        self.dashboard_bridge = DashboardBridge(bus, backend_url=self.config.get('backend_url'))
 
         # ---- Offline queue ----
         self.queue_manager = OfflineQueueManager(
@@ -99,19 +112,37 @@ class Orchestrator:
         self.process_killer = ProcessKiller(interval=3.0)
 
     def _load_config(self) -> dict:
-        """Load configuration from config.ini in the same directory."""
+        """Load configuration.
+
+        Priority (industry standard env-over-file):
+          1. Environment variables (NODE_BACKEND / REMOTE_URL, AGENT_API_KEY, ENDPOINT_NAME)
+          2. config.ini next to the agent root (optional, for standalone installs)
+          3. Safe localhost defaults
+        """
         config = configparser.ConfigParser()
         config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'config.ini')
+        file_cfg = {}
         if os.path.exists(config_path):
-            config.read(config_path)
+            config.read(config_path, encoding='utf-8')
             if 'AIBOO' in config:
-                return dict(config['AIBOO'])
-        # Fallback defaults
+                file_cfg = dict(config['AIBOO'])
+
         return {
-            'remote_url': 'https://stuffy-volley-had.ngrok-free.dev',
-            'api_key': 'dev-key-change-in-production',
-            'endpoint_name': 'Unknown_PC',
-            'server_ip': '192.168.1.100'
+            # env wins — this is what docker-compose / CI injects
+            'remote_url': (
+                os.getenv('REMOTE_URL')
+                or os.getenv('NODE_BACKEND')
+                or file_cfg.get('remote_url')
+                or 'http://localhost:4000'
+            ).rstrip('/'),
+            'backend_url': (
+                os.getenv('NODE_BACKEND')
+                or file_cfg.get('remote_url')
+                or 'http://localhost:4000'
+            ).rstrip('/'),
+            'api_key': os.getenv('AGENT_API_KEY') or file_cfg.get('api_key') or 'dev-key-change-in-production',
+            'endpoint_name': os.getenv('ENDPOINT_NAME') or file_cfg.get('endpoint_name') or 'Unknown_PC',
+            'server_ip': os.getenv('SERVER_IP') or file_cfg.get('server_ip') or '192.168.1.100',
         }
 
     async def start(self) -> None:
@@ -123,11 +154,14 @@ class Orchestrator:
         self.gate3.start()
         self.bridge.start()
 
-        # ---- Start core engines (disabled) ----
+        # ---- Start core engines ----
         self.correlation.start()
-        # self.dashboard.start()          # DISABLED
-        # self.response_eng.start()       # DISABLED
-        # self.real_response.start()      # DISABLED
+        if self.dashboard is not None:
+            self.dashboard.start()
+        if self.response_eng is not None:
+            self.response_eng.start()
+        if self.real_response is not None:
+            self.real_response.start()
 
         # ---- Start Zero Trust engines ----
         self.behavioral_dna.start()
@@ -154,7 +188,7 @@ class Orchestrator:
 
         # ---- Start MERN dashboard bridge ----
         self.dashboard_bridge.start()
-        log.info("DashboardBridge started – using WebSocket endpoint ws://localhost:8000/ws/alerts")
+        log.info("DashboardBridge started — pushing findings to %s", self.config.get('backend_url'))
 
         # ---- Start offline queue ----
         self.queue_manager.start_retry(
@@ -175,12 +209,15 @@ class Orchestrator:
                 log.info("Memory scanning activated for CyberThreatAgent")
 
         # ---- Start Windows Event Log ingestion ----
-        try:
-            await self.windows_ingestor.start(tail_only=True)
-            log.info("Windows Event Log ingestion active — monitoring Security, System, Application logs")
-        except Exception as e:
-            log.warning(f"Windows Event Log ingestion failed: {e}")
-            log.warning("Running in demo mode with predefined events")
+        if self.windows_ingestor is not None:
+            try:
+                await self.windows_ingestor.start(tail_only=True)
+                log.info("Windows Event Log ingestion active — monitoring Security, System, Application logs")
+            except Exception as e:
+                log.warning(f"Windows Event Log ingestion failed: {e}")
+                log.warning("Running in demo mode with predefined events")
+        else:
+            log.info("Windows Event Log ingestion disabled on this host — waiting for API-pushed events")
 
         log.info(
             "Platform ready — tri-gate pipeline + %d specialist agents + "
@@ -206,8 +243,9 @@ class Orchestrator:
 
         # ---- Stop Windows Event Log ingestion ----
         try:
-            await self.windows_ingestor.stop()
-            log.info("Windows Event Log ingestion stopped")
+            if self.windows_ingestor is not None:
+                await self.windows_ingestor.stop()
+                log.info("Windows Event Log ingestion stopped")
         except Exception as e:
             log.debug(f"Error stopping ingestor: {e}")
 
@@ -237,9 +275,10 @@ class Orchestrator:
         # ---- Stop MERN dashboard bridge ----
         await self.dashboard_bridge.stop()
 
-        # ---- Stop other engines (disabled) ----
-        # self.real_response.stop() if hasattr(self.real_response, 'stop') else None
-        # self.response_eng.stop() if hasattr(self.response_eng, 'stop') else None
+        # ---- Stop core engines (guard for env-disabled ones) ----
+        for eng in (self.dashboard, self.response_eng, self.real_response):
+            if eng is not None and hasattr(eng, 'stop'):
+                eng.stop()
         self.correlation.stop()
 
         # ---- Log confirmed threats from Gate 3 ----

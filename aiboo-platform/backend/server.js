@@ -3,12 +3,15 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import hpp from 'hpp';
+import cookieParser from 'cookie-parser';
+import mongoSanitize from 'express-mongo-sanitize';
 import http from 'http';
 
 import { connectDB } from './config/db.js';
 import { initSocket } from './config/socket.js';
 import socketHandler from './sockets/index.js';
 import { errorHandler } from './middleware/error.js';
+import { assertProductionSecrets } from './middleware/security.js';
 // ✅ Import all limiters (auth, api, agent)
 import { authLimiter, apiLimiter, agentLimiter } from './middleware/rateLimiter.js';
 import logger from './utils/logger.js';
@@ -21,8 +24,16 @@ import identityRoutes from './routes/identity.routes.js';
 import responseRoutes from './routes/response.routes.js';
 import aiRoutes from './routes/ai.routes.js';
 import dashboardRoutes from './routes/dashboard.routes.js';
-import agentRoutes from './routes/agent.routes.js';
-import { seedDemoAgentData } from './routes/agent.routes.js';
+import agentRoutes, { seedDemoAgentData, hydrateStoreFromMongo } from './routes/agent.routes.js';
+import auditRoutes from './routes/audit.routes.js';
+import notificationRoutes from './routes/notification.routes.js';
+import intelRoutes from './routes/intel.routes.js';
+import soarRoutes from './routes/soar.routes.js';
+import { requestId } from './middleware/requestId.js';
+import { openapiSpec } from './docs/swagger.js';
+
+// Fail fast on known-default secrets before anything binds a port.
+assertProductionSecrets();
 
 // ❌ Outbound WebSocket import removed – agents push via HTTP.
 
@@ -57,16 +68,46 @@ app.use(cors({
   credentials: true,
 }));
 app.use(hpp());
+app.use(cookieParser());
 app.use(express.json({ limit: '5mb' }));
 
+// Strip Mongo operators ($gt, $ne, $where…) from user input — NoSQL injection
+// defence. Runs after body/cookie parsing, before validation.
+app.use(mongoSanitize());
+
+// Correlation IDs — every request gets an id (propagated from nginx if present)
+app.use(requestId);
+
 app.use((req, res, next) => {
-  logger.info(`${req.method} ${req.originalUrl}`);
+  logger.info({ reqId: req.requestId }, `${req.method} ${req.originalUrl}`);
   next();
 });
 
 // ---- Health & root (no rate limiting) ----
 app.get('/', (req, res) => res.json({ service: 'AiBoO Backend', status: 'running' }));
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
+
+// ---- API documentation (Swagger UI) ----
+// Public in development; admin-only in production unless PUBLIC_DOCS=true.
+const docsEnabled = process.env.DOCS_ENABLED !== 'false';
+if (docsEnabled) {
+  const swaggerUi = (await import('swagger-ui-express')).default;
+  const docsGuard =
+    process.env.NODE_ENV === 'production' && process.env.PUBLIC_DOCS !== 'true'
+      ? protect
+      : (req, res, next) => next();
+  const { authorize: docsAuthorize } = await import('./middleware/auth.js');
+  app.use(
+    '/api/docs',
+    docsGuard,
+    process.env.NODE_ENV === 'production' && process.env.PUBLIC_DOCS !== 'true'
+      ? docsAuthorize('admin', 'analyst')
+      : (req, res, next) => next(),
+    swaggerUi.serve,
+    swaggerUi.setup(openapiSpec, { customSiteTitle: 'AiBoO API Docs' })
+  );
+  app.get('/api/docs.json', (req, res) => res.json(openapiSpec)); // spec for codegen
+}
 
 // ---- Routes with appropriate rate limiters ----
 app.use('/api/auth', authLimiter, authRoutes);                // Strict (20 per 15min)
@@ -77,6 +118,10 @@ app.use('/api/identities', apiLimiter, identityRoutes);
 app.use('/api/respond', apiLimiter, responseRoutes);
 app.use('/api/ai', apiLimiter, aiRoutes);
 app.use('/api/dashboard', apiLimiter, dashboardRoutes);
+app.use('/api/audit', apiLimiter, auditRoutes);
+app.use('/api/notifications', apiLimiter, notificationRoutes);
+app.use('/api/intel', apiLimiter, intelRoutes);
+app.use('/api/soar', apiLimiter, soarRoutes);
 
 // ✅ Agent routes now use agentLimiter (more permissive)
 app.use('/api/agent', agentLimiter, agentRoutes);
@@ -102,6 +147,12 @@ const startServer = async () => {
     if (process.env.NODE_ENV !== 'production' || process.env.SEED_DEMO_DATA === 'true') {
       seedDemoAgentData();
     }
+    // Rehydrate in-memory agent store from Mongo (restart-safe findings).
+    // Non-blocking: a slow Mongo must never delay the port opening / healthcheck.
+    hydrateStoreFromMongo();
+    // SOAR default playbooks (approval-mode only; idempotent).
+    const { seedDefaultPlaybooks } = await import('./services/soar.service.js');
+    seedDefaultPlaybooks();
     server.listen(PORT, () => {
       logger.info(`AiBoO Backend running on port ${PORT}`);
     });

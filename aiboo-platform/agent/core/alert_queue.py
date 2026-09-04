@@ -17,7 +17,12 @@ import httpx
 log = logging.getLogger("AlertQueue")
 
 # Path to the SQLite database file (saved in the agent's root directory)
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "alerts_queue.db")
+# Queue DB location is configurable so containers can mount a volume
+# (docker-compose mounts /app/queue) and survive restarts.
+DB_PATH = os.getenv(
+    "ALERT_QUEUE_DB_PATH",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "alerts_queue.db"),
+)
 
 
 class OfflineQueueManager:

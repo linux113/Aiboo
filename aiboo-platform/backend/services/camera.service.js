@@ -1,6 +1,7 @@
 import Camera from '../models/Camera.js';
 import Detection from '../models/Detection.js';
 import { getIO } from '../config/socket.js';
+import { emitCritical } from '../utils/alerts.js';
 
 const emit = (event, data) => { try { getIO().emit(event, data); } catch {} };
 
@@ -44,14 +45,25 @@ export const deleteCamera = async (id) => {
 export const listDetections = async (filter = {}, limit = 100) =>
   Detection.find(filter).sort({ timestamp: -1 }).limit(limit);
 
+// backend/services/camera.service.js (createDetection section)
 export const createDetection = async (data) => {
+  // CV sends confidence in 0–1; the schema/UI use 0–100. Normalize once here.
+  if (typeof data.confidence === 'number' && data.confidence > 0 && data.confidence <= 1) {
+    data.confidence = Math.round(data.confidence * 1000) / 10; // 0.85 -> 85
+  }
   const detection = await Detection.create(data);
   emit('detection:new', detection);
-  if (['weapon_gun', 'weapon_knife', 'face_watchlist'].includes(data.type)) {
-    emit('alert:critical', {
+  // Critical fan-out: weapons + all CV critical detectors (fire/tamper are
+  // CRITICAL in the CV service and were previously never alerted on).
+  if (
+    ['weapon_gun', 'weapon_knife', 'weapon', 'face_watchlist', 'fire', 'tamper'].includes(data.type) ||
+    data.severity === 'critical'
+  ) {
+    emitCritical({
       type: data.type, cameraId: data.cameraId,
       cameraName: data.cameraName, location: data.location,
-      confidence: data.confidence, timestamp: detection.timestamp,
+      confidence: detection.confidence, severity: data.severity || 'critical',
+      timestamp: detection.timestamp,
       message: buildAlertMessage(data),
     });
   }

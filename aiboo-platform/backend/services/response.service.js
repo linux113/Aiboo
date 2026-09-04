@@ -27,6 +27,20 @@ export const isolateDevice = async (ip, userId) => {
 };
 
 /**
+ * Generic orchestration action recorder — backs the dashboard quick-action
+ * buttons (lock perimeter, quarantine, freeze badge, throttle, war room)
+ * which previously POSTed to endpoints that did not exist.
+ */
+export const recordAction = async (type, target, userId) => {
+  const action = await ResponseAction.create({
+    type,
+    target: target || 'manual',
+    triggeredBy: userId,
+  });
+  return emitResponse(action);
+};
+
+/**
  * Block an IP
  */
 export const blockIP = async (ip, userId) => {

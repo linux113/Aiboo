@@ -1,8 +1,18 @@
 import express from 'express';
 import axios from 'axios';
+import mongoose from 'mongoose';
 import { getIO } from '../config/socket.js';
 import { protect, authorize } from '../middleware/auth.js';
+import { safeEqual } from '../middleware/security.js';
+import { validate } from '../middleware/validate.js';
+import { agentFindingSchema } from '../schemas/index.js';
+import { audit } from '../utils/audit.js';
+import { emitCritical } from '../utils/alerts.js';
+import { enrich } from '../services/intel.service.js';
+import { onCorrelatedAlert } from '../services/soar.service.js';
 import logger from '../utils/logger.js';
+import Finding from '../models/Finding.js';
+import Threat from '../models/Threat.js';
 
 const router = express.Router();
 
@@ -49,12 +59,84 @@ const validateAgentApiKey = (req, res, next) => {
   const apiKey = req.headers['x-api-key'] || '';
   const expectedKey = process.env.AGENT_API_KEY || 'dev-key-change-in-production';
 
-  if (!apiKey || apiKey !== expectedKey) {
+  // Constant-time compare — blocks timing attacks on the agent API key.
+  if (!apiKey || !safeEqual(apiKey, expectedKey)) {
     logger.warn(`Invalid API key attempt from ${req.ip} (source: ${getSource(req)})`);
     return res.status(401).json({ error: 'Invalid or missing API key' });
   }
   next();
 };
+
+// ---- Mongo write-through (findings survive restarts) ----
+// The in-memory `store` stays the hot read path (dashboard latency), but every
+// finding is also persisted to the Finding collection. On boot the store is
+// rehydrated from Mongo so a backend restart no longer wipes agent history.
+const persistFinding = (finding) => {
+  Finding.create({
+    agent_name: finding.agent_name || 'UnknownAgent',
+    threat_type: finding.threat_type || 'unknown',
+    severity: ['low', 'medium', 'high', 'critical'].includes(finding.severity)
+      ? finding.severity
+      : 'low',
+    confidence: typeof finding.confidence === 'number' ? finding.confidence : 0.5,
+    summary: finding.summary || 'No summary provided',
+    actions: Array.isArray(finding.actions) ? finding.actions : [],
+    metadata: {
+      ...(finding.metadata || {}),
+      legacyId: finding.id,
+      ...(finding.source ? { sourceRef: finding.source } : {}),
+    },
+    source: finding.source || 'unknown',
+    timestamp: finding.timestamp ? new Date(finding.timestamp) : new Date(),
+  }).catch((err) => logger.error(`Finding persist failed: ${err.message}`));
+};
+
+// ---- Threat-intel enrichment (fire-and-forget, never blocks ingest) ----
+const enrichFinding = async (finding) => {
+  try {
+    const { iocs, intel } = await enrich(finding);
+    if (!iocs.length) return;
+    finding.metadata = { ...(finding.metadata || {}), iocs, intel };
+    Finding.findOneAndUpdate(
+      { 'metadata.legacyId': finding.id },
+      { $set: { metadata: finding.metadata } }
+    ).catch(() => {});
+    emit('agent:intel', { id: finding.id, iocs, intel });
+    logger.debug(`Intel enriched finding ${finding.id}: ${iocs.length} IoC(s)`);
+  } catch (err) {
+    logger.warn(`Intel enrichment skipped: ${err.message}`);
+  }
+};
+
+export async function hydrateStoreFromMongo() {
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      logger.warn('Agent store hydration skipped — Mongo not connected');
+      return;
+    }
+    const docs = await Finding.find({})
+      .sort({ timestamp: -1 })
+      .limit(MAX)
+      .lean();
+    if (store.findings.length === 0 && docs.length > 0) {
+      store.findings = docs.map((d) => ({
+        id: d.metadata?.legacyId || String(d._id),
+        agent_name: d.agent_name,
+        threat_type: d.threat_type,
+        severity: d.severity,
+        confidence: d.confidence,
+        summary: d.summary,
+        actions: d.actions || [],
+        metadata: { ...(d.metadata || {}), mongoId: String(d._id) },
+        source: d.source,
+        timestamp: d.timestamp?.toISOString?.() ?? d.timestamp,
+      }));
+      logger.info(`Agent store hydrated with ${store.findings.length} findings from MongoDB`);
+    }
+  } catch (err) {
+    logger.error(`Agent store hydration failed: ${err.message}`);
+  }
+}
 
 // ---- Record endpoint heartbeat ----
 const updateEndpointHeartbeat = (source) => {
@@ -72,7 +154,7 @@ const updateEndpointHeartbeat = (source) => {
 // ============================================================
 
 // POST /api/agent/findings – Agent sends a detection
-router.post('/findings', validateAgentApiKey, async (req, res) => {
+router.post('/findings', validateAgentApiKey, validate({ body: agentFindingSchema }), async (req, res) => {
   try {
     const {
       agent_name,
@@ -101,7 +183,9 @@ router.post('/findings', validateAgentApiKey, async (req, res) => {
     };
 
     push(store.findings, finding);
+    persistFinding(finding);
     emit('agent:finding', finding);
+    enrichFinding(finding); // async — updates metadata + emits agent:intel when done
     logger.info(`Agent finding from ${source}: ${threat_type} (${severity})`);
 
     res.status(201).json(finding);
@@ -156,8 +240,14 @@ router.get('/endpoints', (req, res) => {
 // ============================================================
 
 router.post('/finding', protect, (req, res) => {
-  const finding = { ...req.body, source: getSource(req) };
+  const finding = {
+    id: `internal_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+    timestamp: new Date().toISOString(),
+    ...req.body,
+    source: getSource(req),
+  };
   push(store.findings, finding);
+  persistFinding(finding);
   emit('agent:finding', finding);
   res.json({ ok: true });
 });
@@ -165,8 +255,28 @@ router.post('/finding', protect, (req, res) => {
 router.post('/correlated', protect, (req, res) => {
   push(store.correlated, req.body);
   emit('agent:correlated', req.body);
+
+  // Materialise correlated alerts as Threat documents so they persist, are
+  // filterable in the Intelligence module and survive restarts.
+  if (req.body && req.body.severity && req.body.description) {
+    Threat.create({
+      severity: ['critical', 'high', 'medium', 'low'].includes(req.body.severity)
+        ? req.body.severity
+        : 'medium',
+      title: `Agent correlation: ${req.body.event_type || req.body.threat_type || 'converged event'}`,
+      description: req.body.description,
+      source: 'agent',
+      status: 'open',
+      ...(req.body.entity ? { asset: String(req.body.entity).slice(0, 200) } : {}),
+    }).catch((err) => logger.error(`Threat materialise failed: ${err.message}`));
+  }
+
   if (['critical', 'high'].includes(req.body.severity))
-    emit('alert:critical', { ...req.body, message: req.body.description });
+    emitCritical({ ...req.body, message: req.body.description });
+
+  // SOAR: create incidents for any matching playbooks (approval or auto)
+  onCorrelatedAlert(req.body);
+
   res.json({ ok: true });
 });
 

@@ -1,0 +1,21 @@
+{{- if .Values.redis.enabled }}
+{{- if .Values.redis.storage.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: aiboo-redis-data
+  labels:
+    app.kubernetes.io/name: aiboo-redis
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/part-of: aiboo
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.redis.storage.storageClassName }}
+  storageClassName: {{ .Values.redis.storage.storageClassName }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.redis.storage.size }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: aiboo-cv
+  labels:
+    app.kubernetes.io/name: aiboo-cv
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/part-of: aiboo
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: aiboo-cv
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: 5050
+      targetPort: http

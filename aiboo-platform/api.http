@@ -1,0 +1,158 @@
+### AiBoO API playground — VS Code REST Client (humao.rest-client)
+### Click "Send Request" above each request. Install backend deps first.
+### Flow: register (first user = ADMIN) → copy token into @token below → go wild.
+
+@backend = http://localhost:4000
+@agent = http://localhost:8001
+@cv = http://localhost:5050
+
+### dev keys (must match the "Backend (dev)" launch config in .vscode/launch.json)
+@cvIngestKey = vscode-dev-cv-ingest-key
+@agentKey = vscode-dev-agent-key
+
+### 👤 paste the access token from the login/register response here:
+@token = PASTE_TOKEN_HERE
+
+### ─────────── AUTH ───────────
+
+### Register — FIRST registered user becomes admin (role field ignored)
+# @name reg
+POST {{backend}}/api/auth/register
+Content-Type: application/json
+
+{
+  "name": "VS Code Admin",
+  "email": "admin@vscode.dev",
+  "password": "Password123!"
+}
+
+### Login
+# @name login
+POST {{backend}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "admin@vscode.dev",
+  "password": "Password123!"
+}
+
+### Me (paste @token above first)
+GET {{backend}}/api/auth/me
+Authorization: Bearer {{token}}
+
+### ─────────── CV DETECTION INGEST (machine-to-machine) ───────────
+
+### Fire detection → dashboard red banner + critical fan-out
+POST {{backend}}/api/cameras/detections
+Content-Type: application/json
+X-API-Key: {{cvIngestKey}}
+
+{
+  "cameraId": "cam-vscode",
+  "cameraName": "VS Code Cam",
+  "location": "Desk",
+  "type": "fire",
+  "severity": "critical",
+  "confidence": 0.92,
+  "label": "fire"
+}
+
+### Ingest WITHOUT key → expect 401 (proves the guard)
+POST {{backend}}/api/cameras/detections
+Content-Type: application/json
+
+{ "type": "fire" }
+
+### ─────────── AGENT FINDINGS ───────────
+
+### Agent pushes a finding with an IoC (203.0.113.66) → intel enrichment
+POST {{backend}}/api/agent/findings
+Content-Type: application/json
+X-API-Key: {{agentKey}}
+X-Endpoint-Id: vscode-endpoint
+
+{
+  "agent_name": "CyberThreatAgent",
+  "threat_type": "c2_beacon",
+  "severity": "high",
+  "confidence": 0.8,
+  "summary": "Beaconing to 203.0.113.66 every 30s",
+  "actions": ["monitor"]
+}
+
+### Recent findings
+GET {{backend}}/api/agent/findings?limit=10
+
+### Heartbeat (keeps endpoint "live" for 2 min)
+POST {{backend}}/api/agent/heartbeat
+X-API-Key: {{agentKey}}
+X-Endpoint-Id: vscode-endpoint
+
+### ─────────── SOAR (correlated alert → incident → approve) ───────────
+
+### Ransomware-pattern correlated alert → creates PENDING incident
+POST {{backend}}/api/agent/correlated
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "event_type": "ransomware_prelude",
+  "severity": "critical",
+  "description": "mass file renames + shadow copy deletion (test)",
+  "entity": "HOST-VSCODE"
+}
+
+### Pending incidents (copy an _id for the approve call below)
+GET {{backend}}/api/soar/incidents?status=pending
+Authorization: Bearer {{token}}
+
+### Approve & execute (replace the id!)
+POST {{backend}}/api/soar/incidents/REPLACE_WITH_ID/approve
+Authorization: Bearer {{token}}
+
+### List playbooks
+GET {{backend}}/api/soar/playbooks
+Authorization: Bearer {{token}}
+
+### ─────────── INTEL / NOTIFICATIONS / AUDIT ───────────
+
+### Threat-intel lookup (needs a real ABUSEIPDB_API_KEY in backend env; otherwise 'unknown')
+GET {{backend}}/api/intel/lookup?ip=8.8.8.8
+Authorization: Bearer {{token}}
+
+### Test alert through every configured channel (Slack/PagerDuty/webhook/SIEM)
+POST {{backend}}/api/notifications/test
+Authorization: Bearer {{token}}
+
+### Audit trail (last 20)
+GET {{backend}}/api/audit?limit=20
+Authorization: Bearer {{token}}
+
+### ─────────── AGENT SERVICE DIRECT (tri-gate) ───────────
+
+### Agent health + metrics
+GET {{agent}}/health
+GET {{agent}}/metrics
+
+### Push a ThreatEvent straight into the tri-gate (Gate1 → Gate2 → Gate3)
+### Great for the debugging walkthrough: breakpoint in gates/gate1_perimeter.py
+POST {{agent}}/events
+Content-Type: application/json
+X-API-Key: {{agentKey}}
+
+{
+  "source": "vscode",
+  "threat_type": "network_intrusion",
+  "severity": "high",
+  "payload": {
+    "message": "port scan from 203.0.113.66",
+    "entity": "HOST-VSCODE",
+    "context": { "ports": [22, 3389, 445] }
+  }
+}
+
+### ─────────── HEALTH ───────────
+
+GET {{backend}}/health
+GET {{agent}}/health
+GET {{cv}}/health

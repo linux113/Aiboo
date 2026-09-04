@@ -1,0 +1,33 @@
+{
+  // AiBoO workspace settings (JSONC — comments allowed)
+  "editor.formatOnSave": true,
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/*.pyc": true,
+    "**/node_modules": true,
+    "**/dist": true
+  },
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/package-lock.json": true,
+    "**/dist": true
+  },
+  // JS/TS — two projects, pick per-folder ESLint workspace
+  "eslint.workingDirectories": [{ "mode": "auto" }],
+  "typescript.tsdk": "frontend/node_modules/typescript/lib",
+  "typescript.enablePromptUseWorkspaceTsdk": true,
+  // Python — agent & cv-service
+  "python.analysis.extraPaths": ["${workspaceFolder}/agent"],
+  "python.testing.pytestEnabled": true,
+  "python.testing.pytestArgs": ["tests"],
+  "python.testing.cwd": "${workspaceFolder}/agent",
+  // YAML — docker-compose + helm validation
+  "yaml.schemas": {
+    "https://raw.githubusercontent.com/compose-spec/compose-spec/master/schema/compose-spec.json": [
+      "docker-compose.yml"
+    ]
+  },
+  // REST Client (api.http)
+  "rest-client.followRedirect": true,
+  "rest-client.timeoutinmilliseconds": 10000
+}

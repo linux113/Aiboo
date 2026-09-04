@@ -1,0 +1,11 @@
+# Optional GPU extras for the cv-service (TensorRT / accelerated inference).
+# Install on a CUDA-enabled host/container ONLY — the base image must match
+# the CUDA version (e.g. nvcr.io/nvidia/pytorch:23.12-py3).
+#
+#   pip install -r requirements.txt -r requirements-gpu.txt
+#
+# Then export once (tools/export_model.py) and point YOLO_MODEL_PATH at the
+# .onnx (portable) or .engine (fastest, per-GPU-arch) artifact.
+tensorrt>=8.6; platform_system == "Linux"
+# onnxruntime-gpu is an alternative to TensorRT for ONNX execution:
+# onnxruntime-gpu>=1.17

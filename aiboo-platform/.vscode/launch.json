@@ -1,0 +1,137 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Backend (dev)",
+      "type": "node",
+      "request": "launch",
+      "cwd": "${workspaceFolder}/backend",
+      "program": "${workspaceFolder}/backend/server.js",
+      "skipFiles": [
+        "<node_internals>/**",
+        "**/node_modules/**"
+      ],
+      "env": {
+        "NODE_ENV": "development",
+        "PORT": "4000",
+        "MONGO_URI": "mongodb://localhost:27017/aiboo",
+        "JWT_SECRET": "vscode-dev-secret-vscode-dev-secret-vscode-dev-1234",
+        "AGENT_API_KEY": "vscode-dev-agent-key",
+        "CV_INGEST_KEY": "vscode-dev-cv-ingest-key",
+        "API_KEYS": "vscode-dev-service-key",
+        "SEED_DEMO_DATA": "true",
+        "LOG_LEVEL": "info",
+        "LOG_FILE": "${workspaceFolder}/logs/backend.log",
+        "REDIS_URL": "redis://localhost:6379"
+      }
+    },
+    {
+      "name": "Backend: smoke tests (no DB needed)",
+      "type": "node",
+      "request": "launch",
+      "cwd": "${workspaceFolder}/backend",
+      "program": "${workspaceFolder}/backend/smoke-test.mjs",
+      "skipFiles": [
+        "<node_internals>/**",
+        "**/node_modules/**"
+      ]
+    },
+    {
+      "name": "Agent (API mode)",
+      "type": "debugpy",
+      "request": "launch",
+      "cwd": "${workspaceFolder}/agent",
+      "program": "${workspaceFolder}/agent/run_api.py",
+      "justMyCode": false,
+      "env": {
+        "API_HOST": "0.0.0.0",
+        "API_PORT": "8001",
+        "NODE_BACKEND": "http://localhost:4000",
+        "REMOTE_URL": "http://localhost:4000",
+        "ENDPOINT_NAME": "vscode-dev-agent",
+        "AGENT_API_KEY": "vscode-dev-agent-key",
+        "INTERNAL_API_KEY": "vscode-dev-internal-key",
+        "LOG_LEVEL": "INFO"
+      }
+    },
+    {
+      "name": "Agent (full tri-gate orchestrator)",
+      "type": "debugpy",
+      "request": "launch",
+      "cwd": "${workspaceFolder}/agent",
+      "program": "${workspaceFolder}/agent/run_api.py",
+      "justMyCode": false,
+      "env": {
+        "API_HOST": "0.0.0.0",
+        "API_PORT": "8001",
+        "NODE_BACKEND": "http://localhost:4000",
+        "REMOTE_URL": "http://localhost:4000",
+        "ENDPOINT_NAME": "vscode-dev-agent",
+        "AGENT_API_KEY": "vscode-dev-agent-key",
+        "INTERNAL_API_KEY": "vscode-dev-internal-key",
+        "RUN_ORCHESTRATOR": "true",
+        "ENABLE_COMMAND_DASHBOARD": "true",
+        "ENABLE_AUTONOMOUS_RESPONSE": "false",
+        "ENABLE_REAL_RESPONSE": "false",
+        "LOG_LEVEL": "INFO"
+      }
+    },
+    {
+      "name": "CV service",
+      "type": "debugpy",
+      "request": "launch",
+      "cwd": "${workspaceFolder}/cv-service",
+      "program": "${workspaceFolder}/cv-service/app.py",
+      "justMyCode": false,
+      "env": {
+        "CV_HOST": "0.0.0.0",
+        "CV_PORT": "5050",
+        "NODE_BACKEND": "http://localhost:4000",
+        "CV_AUTH_TOKEN": "vscode-dev-cv-token",
+        "CV_INGEST_KEY": "vscode-dev-cv-ingest-key",
+        "FRONTEND_ORIGIN": "http://localhost:5173"
+      }
+    },
+    {
+      "name": "Frontend (Chrome debug)",
+      "type": "chrome",
+      "request": "launch",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}/frontend/src",
+      "sourceMapPathOverrides": {
+        "webpack:///./src/*": "${webRoot}/*",
+        "/src/*": "${webRoot}/*"
+      },
+      "userDataDir": "${workspaceFolder}/.vscode/.chrome-debug-profile"
+    },
+    {
+      "name": "Web front door (node)",
+      "type": "node",
+      "request": "launch",
+      "cwd": "${workspaceFolder}/backend",
+      "program": "${workspaceFolder}/backend/web.mjs",
+      "skipFiles": [
+        "<node_internals>/**",
+        "**/node_modules/**"
+      ],
+      "env": {
+        "PORT": "5173",
+        "BACKEND": "http://127.0.0.1:4000",
+        "AGENT": "http://127.0.0.1:8001"
+      }
+    }
+  ],
+  "compounds": [
+    {
+      "name": "\ud83d\ude80 Real hybrid stack (backend + agent + web)",
+      "configurations": [
+        "Backend (dev)",
+        "Agent (API mode)",
+        "Web front door (node)"
+      ],
+      "presentation": {
+        "hideCompounds": false
+      }
+    }
+  ]
+}

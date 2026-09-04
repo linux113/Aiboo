@@ -48,7 +48,13 @@ class Config:
     PORT = int(os.environ.get("CV_PORT", 5050))
     NODE_BACKEND = os.environ.get("NODE_BACKEND", "http://localhost:4000")
     CV_AUTH_TOKEN = os.environ.get("CV_AUTH_TOKEN", "changeme-default-token-change-in-production")
+    # Shared secret with the Node backend for POST /api/cameras/detections.
+    # Must match backend env CV_INGEST_KEY. Empty in dev = unauthenticated ingest.
+    CV_INGEST_KEY = os.environ.get("CV_INGEST_KEY", "")
     YOLO_MODEL_PATH = os.environ.get("YOLO_MODEL_PATH", "yolov8n.pt")
+    # cuda device for inference: "0", "cpu", or "" for ultralytics auto-select.
+    # For TensorRT/ONNX exports set YOLO_MODEL_PATH to the .onnx/.engine file.
+    YOLO_DEVICE = os.environ.get("YOLO_DEVICE", "")
     YOLO_CONFIDENCE = float(os.environ.get("YOLO_CONFIDENCE", "0.30"))
     FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "http://localhost:3000")
     DETECTION_COOLDOWN_WEAPON = int(os.environ.get("DETECTION_COOLDOWN_WEAPON", "3"))
@@ -947,7 +953,12 @@ class CameraWorker:
 
         if YOLO_AVAILABLE:
             try:
-                results = yolo(frame, verbose=False, conf=Config.YOLO_CONFIDENCE)[0]
+                results = yolo(
+                    frame,
+                    verbose=False,
+                    conf=Config.YOLO_CONFIDENCE,
+                    **({"device": Config.YOLO_DEVICE} if Config.YOLO_DEVICE else {}),
+                )[0]
             except Exception as exc:
                 log.error("YOLO inference failed: %s", exc)
                 return annotated, []
@@ -1268,6 +1279,8 @@ class CameraWorker:
         headers = {"Content-Type": "application/json"}
         if node_token:
             headers["Authorization"] = f"Bearer {node_token}"
+        if Config.CV_INGEST_KEY:
+            headers["X-API-Key"] = Config.CV_INGEST_KEY
 
         success = _post_with_retry(
             f"{Config.NODE_BACKEND}/api/cameras/detections",
@@ -1336,6 +1349,8 @@ def _retry_failed_detections():
             with _node_token_lock:
                 if _NODE_TOKEN:
                     headers["Authorization"] = f"Bearer {_NODE_TOKEN}"
+            if Config.CV_INGEST_KEY:
+                headers["X-API-Key"] = Config.CV_INGEST_KEY
             try:
                 resp = requests.post(
                     f"{Config.NODE_BACKEND}/api/cameras/detections",

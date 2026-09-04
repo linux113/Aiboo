@@ -52,7 +52,7 @@ export default function Login({
     setLoading(true);
     try {
       const res = await api.post(
-        mode === "login" ? "/auth/login" : "/auth/register",
+        mode === "login" ? `${API}/auth/login` : `${API}/auth/register`,
         mode === "login"
           ? { email, password }
           : { name, email, password, role }

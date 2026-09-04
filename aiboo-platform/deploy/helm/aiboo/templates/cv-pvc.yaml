@@ -1,0 +1,19 @@
+{{- if .Values.cv.modelCache.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: aiboo-cv-models
+  labels:
+    app.kubernetes.io/name: aiboo-cv
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/part-of: aiboo
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.cv.modelCache.storageClassName }}
+  storageClassName: {{ .Values.cv.modelCache.storageClassName }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.cv.modelCache.size }}
+{{- end }}

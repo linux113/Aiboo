@@ -1,0 +1,12 @@
+apiVersion: v2
+name: aiboo
+description: |
+  AiBoO — AI-driven Cyber-Physical Security Operations Platform.
+  Backend (Express/Socket.IO) + React frontend (nginx) + tri-gate agent + CV service
+  (YOLOv8/DeepSORT), with optional in-cluster MongoDB and Redis.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords: [security, soc, yolo, edr, zero-trust]
+maintainers:
+  - name: Aiboo Team

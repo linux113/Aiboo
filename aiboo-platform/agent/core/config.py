@@ -3,6 +3,12 @@ import os
 from dataclasses import dataclass
 
 
+INSECURE_DEFAULT_KEYS = {
+    "dev-key-change-in-production",
+    "internal-dev-key",
+}
+
+
 @dataclass
 class AgentConfig:
     api_host: str = os.getenv("API_HOST", "0.0.0.0")
@@ -22,6 +28,22 @@ class AgentConfig:
     llm_model: str = os.getenv("LLM_MODEL", "claude-3-haiku-20240307")
     rate_limit: int = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
 
+    # Where this agent pushes findings / alerts.
+    # Priority: REMOTE_URL env > NODE_BACKEND env > config.ini (read by orchestrator) > localhost.
+    # NEVER hardcode a tunnel URL (ngrok etc.) — tunnels rotate and must be injected at runtime.
+    remote_url: str = os.getenv(
+        "REMOTE_URL", os.getenv("NODE_BACKEND", "http://localhost:4000")
+    ).rstrip("/")
+
+    endpoint_name: str = os.getenv("ENDPOINT_NAME", os.getenv("COMPUTERNAME", "Unknown_PC"))
+    server_ip: str = os.getenv("SERVER_IP", "192.168.1.100")
+
+    # Kill switches for engines that take real actions on the host.
+    # Observability engines are safe to enable; action engines are opt-in.
+    enable_command_dashboard: bool = os.getenv("ENABLE_COMMAND_DASHBOARD", "true").lower() == "true"
+    enable_autonomous_response: bool = os.getenv("ENABLE_AUTONOMOUS_RESPONSE", "false").lower() == "true"
+    enable_real_response: bool = os.getenv("ENABLE_REAL_RESPONSE", "false").lower() == "true"
+
 
 config = AgentConfig()
 
@@ -35,3 +57,15 @@ if config.internal_key == "internal-dev-key":
         "INTERNAL_API_KEY is set to the development default 'internal-dev-key' — "
         "CHANGE IT in production!"
     )
+
+# Fail fast: refuse to run with known-default credentials in production.
+if os.getenv("AIBOO_ENV", "").lower() == "production" or os.getenv("ENVIRONMENT", "").lower() == "production":
+    _insecure = [name for name, val in (
+        ("AGENT_API_KEY", config.api_key),
+        ("INTERNAL_API_KEY", config.internal_key),
+    ) if val in INSECURE_DEFAULT_KEYS]
+    if _insecure:
+        raise RuntimeError(
+            f"Refusing to start in production with insecure default credentials: {', '.join(_insecure)}. "
+            "Set real secrets via environment variables before deploying."
+        )
